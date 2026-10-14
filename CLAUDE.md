@@ -29,7 +29,7 @@ Technischer Plan: https://claude.ai/code/artifact/e834733a-d72b-4a65-bdea-881002
 | `vision.py` | MediaPipe Pose (Körperpunkte, Maske, Blickrichtung); auf dem iPhone: Apple Vision |
 | `segment.py` | optionale Kantennachschärfung der Maske mit GrabCut (Standard aus, hilft nur bei unruhigem Hintergrund) |
 | `quality.py` | Scan-Assistent: Licht, Schärfe, Abstand, Position, A-Pose, Stillhalten, Blickwinkel |
-| `video.py` | Video/Fotos einlesen, prüfen, bestes Bild pro Blickwinkel wählen |
+| `video.py` | Video/Fotos einlesen (iPhone-HDR/HLG über PyAV selbst nach sRGB), prüfen, bestes Bild pro Blickwinkel wählen |
 | `head.py` | Kopfaufnahme: Gesichtspunkte (MediaPipe Face Landmarker), Bündelausgleich, Kopf verformen (Gesicht, Schädel, Ohren), Kopf-Hautbild, Augen zeichnen |
 | `texture.py` | Hautbild: UV-Karte, Sichtbarkeit je Bild, Farben in zwei Lagen mischen, Lücken füllen, Feinausrichtung per optischem Fluss, Vorschau-Rendering |
 | `mesh_check.py` | wasserdicht, Orientierung, kaputte oder umgeklappte Dreiecke |
@@ -63,6 +63,8 @@ uv pip install -p .venv/bin/python -e ".[prototyp,dev]"
 ```
 
 - Unter Linux braucht MediaPipe `libegl1 libgles2 libgl1`.
+- iPhone-Videos sind meist HDR (HEVC 10 Bit, HLG, BT.2020). OpenCV liest sie überstrahlt (Gesicht zu ~75 % bei 255);
+  `video.py` liest sie deshalb mit PyAV roh und rechnet selbst um (`hdr_to_srgb`). Prüfen: `ffprobe … color_transfer`.
 - Anny legt beim ersten Start einen Zwischenspeicher unter `~/.cache/anny` an (gut 1 GB), danach schnell.
 - Ohne eigenes Video testen: `synthetic.film()` (Silhouetten) oder `synthetic.film_video()` (gerendertes Drehvideo).
 - Hautbild: `fit.fit_views` richtet jedes Bild bei fester Form aus (eigene Haltung je Bild),

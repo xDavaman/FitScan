@@ -36,7 +36,7 @@ DETAIL_POWER = 6.0  # Feinheiten fast nur aus den besten Bildern
 MAX_FLOW = 0.02  # Anteil der Personenhöhe: so weit darf die Feinausrichtung ein Bild verschieben
 ROBUST_SIGMA = 40.0  # Farbabstand (0..255) zum vorläufigen Hautbild, ab dem ein Bild kaum noch zählt
 SEEN_FULL = 0.05  # Gewichtssumme, ab der eine Stelle als sicher gesehen gilt
-CLIPPED_RAMP = 24.0  # so nah an Weiß (255) zählt ein Pixel immer weniger (überstrahlt)
+CLIPPED_RAMP = 8.0  # so nah an Weiß (255) zählt ein Pixel immer weniger (überstrahlt)
 PADDING = 12  # Texel: Farbe über die Ränder der UV-Inseln hinaus (gegen Nähte beim Verkleinern)
 
 
@@ -66,11 +66,18 @@ def uv_map(model: BodyModel, size: int = TEXTURE_SIZE) -> UVMap:
         return _UV_CACHE[size]
     uv = model.anny.texture_coordinates.detach().cpu().numpy().astype(np.float64)
     face_uv = model.anny.face_texture_coordinate_indices.detach().cpu().numpy().astype(np.int64)
+    out = rasterize_uv(uv, face_uv, size)
+    _UV_CACHE[size] = out
+    return out
+
+
+def rasterize_uv(uv: np.ndarray, face_uv: np.ndarray, size: int, faces: np.ndarray | None = None) -> UVMap:
+    """Welches Dreieck (und wo darin) jeder Texel zeigt; faces: (F,) bool, nur diese Dreiecke."""
     px = uv_pixels(uv, size)
     ids = np.zeros((size, size), np.int32)
     tris = np.round(px[face_uv] * 16).astype(np.int32)
-    for f, tri in enumerate(tris):
-        cv2.fillConvexPoly(ids, tri, f + 1, lineType=cv2.LINE_8, shift=4)
+    for f in range(len(face_uv)) if faces is None else np.flatnonzero(faces):
+        cv2.fillConvexPoly(ids, tris[f], int(f) + 1, lineType=cv2.LINE_8, shift=4)
     texel = np.flatnonzero(ids.ravel())
     face = ids.ravel()[texel] - 1
     rows, cols = np.divmod(texel, size)
@@ -85,9 +92,52 @@ def uv_map(model: BodyModel, size: int = TEXTURE_SIZE) -> UVMap:
     w2 = (d00 * d21 - d01 * d20) / den
     bary = np.clip(np.stack([1 - w1 - w2, w1, w2], -1), 0, None)
     bary /= np.maximum(bary.sum(1, keepdims=True), 1e-9)
-    out = UVMap(size, uv.astype(np.float32), face_uv, texel, face, bary.astype(np.float32))
-    _UV_CACHE[size] = out
-    return out
+    return UVMap(size, uv.astype(np.float32), face_uv, texel, face, bary.astype(np.float32))
+
+
+# Die Augäpfel haben in Annys UV-Karte nur etwa einen Texel pro Millimeter (Iris gut 10 Texel breit).
+# Sie bekommen deshalb ein eigenes Bild: linkes Auge (der Person) in der linken, rechtes in der
+# rechten Hälfte, jeweils so groß wie möglich. Netz und Skelett bleiben gleich.
+EYE_TEXTURE = 2048
+
+
+def eye_faces(model: BodyModel) -> dict[str, np.ndarray]:
+    """(F,) bool je Augapfel ("L", "R"): Dreiecke, deren Ecken alle am Augenknochen hängen."""
+    return {side: model.dominant_bone_mask(lambda n, s=side: n == f"eye.{s}")[model.faces].all(1)
+            for side in ("L", "R")}
+
+
+def eye_layout(model: BodyModel) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(uv, face_uv, eye): Texturkoordinaten mit zusätzlichen Einträgen für die Augäpfel im eigenen
+    Augenbild, die Ecken-Indizes aller Dreiecke dazu und welche Dreiecke Augäpfel sind."""
+    uv = model.anny.texture_coordinates.detach().cpu().numpy().astype(np.float64)
+    face_uv = model.anny.face_texture_coordinate_indices.detach().cpu().numpy().astype(np.int64).copy()
+    eye = np.zeros(len(face_uv), bool)
+    extra = [uv]
+    count = len(uv)
+    for k, sel in enumerate(eye_faces(model).values()):
+        if not sel.any():
+            continue
+        idx, inverse = np.unique(face_uv[sel], return_inverse=True)
+        pts = uv[idx]
+        lo, hi = pts.min(0), pts.max(0)
+        scale = 0.47 / max(float((hi - lo).max()), 1e-9)  # Insel füllt ihre Hälfte, mit Rand
+        pts = (pts - (lo + hi) / 2) * scale + [0.25 + 0.5 * k, 0.5]
+        face_uv[sel] = count + inverse.reshape(-1, 3)
+        extra.append(pts)
+        count += len(pts)
+        eye |= sel
+    return np.concatenate(extra), face_uv, eye
+
+
+_EYE_UV_CACHE: dict[int, UVMap] = {}
+
+
+def eye_uv_map(model: BodyModel, size: int = EYE_TEXTURE) -> UVMap:
+    if size not in _EYE_UV_CACHE:
+        uv, face_uv, eye = eye_layout(model)
+        _EYE_UV_CACHE[size] = rasterize_uv(uv, face_uv, size, eye)
+    return _EYE_UV_CACHE[size]
 
 
 # ------------------------------------------------------------------------- Sichtbarkeit

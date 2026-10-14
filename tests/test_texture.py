@@ -84,6 +84,37 @@ def test_textured_glb_and_obj(model, known_skin, tmp_path):
     assert (tmp_path / "haut_haut.jpg").stat().st_size > 1000
 
 
+def test_eyes_get_own_material(model, known_skin, tmp_path):
+    """Mit Augenbild: Augäpfel als zweiter Netzteil mit eigenem Material und Bild, gleiche Punkte,
+    Formregler auf beiden Teilen; die Augen-UVs füllen das Augenbild."""
+    from fitscan.texture import eye_faces, eye_layout
+
+    eyes = np.full((256, 256, 3), 230, np.uint8)
+    rig = build_rig(model, BodyParams(), skin=known_skin, eyes=eyes)
+    on = np.logical_or.reduce(list(eye_faces(model).values()))
+    assert on.sum() > 100 and (rig.eye_faces == on).all()
+    uv, face_uv, eye = eye_layout(model)
+    left, right = (uv[face_uv[sel]].reshape(-1, 2) for sel in eye_faces(model).values())
+    assert left[:, 0].max() <= 0.5 <= right[:, 0].min()
+    assert np.ptp(left, 0).max() > 0.45 and np.ptp(right, 0).max() > 0.45  # Insel füllt ihre Hälfte
+    path = write_glb(rig, tmp_path / "augen.glb")
+    data = path.read_bytes()
+    length, _ = struct.unpack("<I4s", data[12:20])
+    gltf = json.loads(data[20:20 + length])
+    body, ball = gltf["meshes"][0]["primitives"]
+    assert body["attributes"] == ball["attributes"] and body["targets"] == ball["targets"]
+    assert gltf["accessors"][ball["indices"]]["count"] == 3 * on.sum()
+    assert gltf["accessors"][body["indices"]]["count"] == 3 * (~on).sum()
+    assert [m["name"] for m in gltf["materials"]] == ["Haut", "Augen"]
+    assert gltf["materials"][ball["material"]]["pbrMetallicRoughness"]["baseColorTexture"] == {"index": 1}
+    assert len(gltf["images"]) == len(gltf["textures"]) == 2
+    obj = write_obj(rig, tmp_path / "augen.obj")
+    text = obj.read_text("utf-8")
+    assert "usemtl Haut" in text and "usemtl Augen" in text
+    assert text.count("\nf ") == len(model.faces)
+    assert "map_Kd augen_augen.jpg" in (tmp_path / "augen.mtl").read_text("utf-8")
+
+
 @pytest.mark.slow
 def test_scan_texture_end_to_end(tmp_path, model):
     """Künstliches Drehvideo mit bekanntem Hautbild: Prüfung, Ausrichtung je Bild, zwei Durchgänge

@@ -89,6 +89,8 @@ class RiggedMesh:
     skin: np.ndarray | None = None  # Hautbild (H, W, 3) uint8 RGB
     uv: np.ndarray | None = None  # (U, 2) Texturkoordinaten wie in OBJ (v nach oben)
     face_uv: np.ndarray | None = None  # (F, 3)
+    eyes: np.ndarray | None = None  # eigenes Bild der Augäpfel (texture.eye_layout), eigenes Material
+    eye_faces: np.ndarray | None = None  # (F,) bool: Dreiecke der Augäpfel
 
     def split_at_seams(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Für GLB: (Punkt, UV)-Paare. Gibt Punktindex je neuem Punkt, dessen UV (glTF: v nach
@@ -115,7 +117,7 @@ def top4_weights(indices: np.ndarray, weights: np.ndarray) -> tuple[np.ndarray, 
 
 
 def build_rig(model: BodyModel, params: BodyParams, preset: str = "anny",
-              morphs: bool = True, skin: np.ndarray | None = None) -> RiggedMesh:
+              morphs: bool = True, skin: np.ndarray | None = None, eyes: np.ndarray | None = None) -> RiggedMesh:
     if params.offsets is not None:
         from .fit import repair_offsets
 
@@ -159,12 +161,17 @@ def build_rig(model: BodyModel, params: BodyParams, preset: str = "anny",
             other = convert(model.rest_numpy(p)["vertices"].astype(np.float64))
             morph_deltas[name] = (other - v_y).astype(np.float32)
 
-    uv = face_uv = None
-    if skin is not None:
+    uv = face_uv = eye_faces = None
+    if skin is not None and eyes is not None:
+        from .texture import eye_layout
+
+        uv, face_uv, eye_faces = eye_layout(model)
+        uv = uv.astype(np.float32)
+    elif skin is not None:
         uv = model.anny.texture_coordinates.detach().cpu().numpy().astype(np.float32)
         face_uv = model.anny.face_texture_coordinate_indices.detach().cpu().numpy().astype(np.int64)
     return RiggedMesh(
-        skin=skin, uv=uv, face_uv=face_uv,
+        skin=skin, uv=uv, face_uv=face_uv, eyes=eyes if eye_faces is not None else None, eye_faces=eye_faces,
         vertices=v_y.astype(np.float32),
         normals=vertex_normals(v_y, model.faces).astype(np.float32),
         faces=model.faces.astype(np.uint32),
@@ -262,7 +269,10 @@ def write_glb(rig: RiggedMesh, path: Path, name: str = "FitScan") -> Path:
     jnt = buf.add(rig.joints4[src], UINT16, "VEC4", ARRAY_BUFFER)
     wgt = buf.add(rig.weights4[src], FLOAT, "VEC4", ARRAY_BUFFER)
     tex = buf.add(uv, FLOAT, "VEC2", ARRAY_BUFFER) if textured else None
-    idx = buf.add(faces.reshape(-1), UINT32, "SCALAR", ELEMENT_ARRAY_BUFFER)
+    # Augäpfel mit eigenem Bild: zweiter Teil des Netzes mit eigenem Material, gleiche Punkte
+    with_eyes = textured and rig.eyes is not None and rig.eye_faces is not None and rig.eye_faces.any()
+    groups = [faces[~rig.eye_faces], faces[rig.eye_faces]] if with_eyes else [faces]
+    idx = [buf.add(g.reshape(-1), UINT32, "SCALAR", ELEMENT_ARRAY_BUFFER) for g in groups]
     targets, target_names = [], []
     for morph_name, delta in rig.morphs.items():
         targets.append({"POSITION": buf.add(delta[src], FLOAT, "VEC3", ARRAY_BUFFER, minmax=True)})
@@ -284,27 +294,33 @@ def write_glb(rig: RiggedMesh, path: Path, name: str = "FitScan") -> Path:
         else:
             nodes[first_joint + parent].setdefault("children", []).append(first_joint + j)
 
-    primitive = {
-        "attributes": {"POSITION": pos, "NORMAL": nor, "JOINTS_0": jnt, "WEIGHTS_0": wgt},
-        "indices": idx, "material": 0, "mode": 4,
-    }
+    attributes = {"POSITION": pos, "NORMAL": nor, "JOINTS_0": jnt, "WEIGHTS_0": wgt}
+    if textured:
+        attributes["TEXCOORD_0"] = tex
+    primitives = [{"attributes": attributes, "indices": i, "material": k, "mode": 4} for k, i in enumerate(idx)]
     material = {"name": "Haut", "pbrMetallicRoughness": {
         "baseColorFactor": SKIN_COLOR, "metallicFactor": 0.0, "roughnessFactor": 0.6}}
+    materials = [material]
     extra: dict = {}
     if textured:
-        primitive["attributes"]["TEXCOORD_0"] = tex
-        image_view = buf.add_bytes(encode_skin(rig.skin))
+        images = [("Haut", rig.skin)] + ([("Augen", rig.eyes)] if with_eyes else [])
         material["pbrMetallicRoughness"]["baseColorFactor"] = [1.0, 1.0, 1.0, 1.0]
         material["pbrMetallicRoughness"]["roughnessFactor"] = 0.75  # Haut glänzt kaum
         material["pbrMetallicRoughness"]["baseColorTexture"] = {"index": 0}
+        if with_eyes:
+            materials.append({"name": "Augen", "pbrMetallicRoughness": {
+                "baseColorFactor": [1.0, 1.0, 1.0, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.25,
+                "baseColorTexture": {"index": 1}}})
         extra = {
-            "images": [{"name": "Haut", "bufferView": image_view, "mimeType": "image/jpeg"}],
+            "images": [{"name": n, "bufferView": buf.add_bytes(encode_skin(img)), "mimeType": "image/jpeg"}
+                       for n, img in images],
             "samplers": [{"magFilter": 9729, "minFilter": 9987, "wrapS": 33071, "wrapT": 33071}],
-            "textures": [{"sampler": 0, "source": 0}],
+            "textures": [{"sampler": 0, "source": k} for k in range(len(images))],
         }
-    mesh: dict = {"name": f"{name}_Body", "primitives": [primitive]}
+    mesh: dict = {"name": f"{name}_Body", "primitives": primitives}
     if targets:
-        primitive["targets"] = targets
+        for primitive in primitives:
+            primitive["targets"] = targets
         mesh["weights"] = [0.0] * len(targets)
         mesh["extras"] = {"targetNames": target_names}
 
@@ -316,7 +332,7 @@ def write_glb(rig: RiggedMesh, path: Path, name: str = "FitScan") -> Path:
         "meshes": [mesh],
         "skins": [{"name": f"{name}_Rig", "joints": list(range(first_joint, first_joint + len(rig.joint_names))),
                    "inverseBindMatrices": ibm_acc, "skeleton": first_joint}],
-        "materials": [material],
+        "materials": materials,
         **extra,
         "accessors": buf.accessors,
         "bufferViews": buf.views,
@@ -344,11 +360,16 @@ def write_obj(rig: RiggedMesh, path: Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["# FitScan Körpermodell, Meter, Y oben"]
+    with_eyes = rig.skin is not None and rig.eyes is not None and rig.eye_faces is not None
     if rig.skin is not None:
         image = path.with_name(f"{path.stem}_haut.jpg")
         image.write_bytes(encode_skin(rig.skin))
-        path.with_suffix(".mtl").write_text(
-            f"newmtl Haut\nKd 1.0 1.0 1.0\nKs 0.0 0.0 0.0\nNs 10\nmap_Kd {image.name}\n", "utf-8")
+        mtl = f"newmtl Haut\nKd 1.0 1.0 1.0\nKs 0.0 0.0 0.0\nNs 10\nmap_Kd {image.name}\n"
+        if with_eyes:
+            eyes = path.with_name(f"{path.stem}_augen.jpg")
+            eyes.write_bytes(encode_skin(rig.eyes))
+            mtl += f"\nnewmtl Augen\nKd 1.0 1.0 1.0\nKs 0.3 0.3 0.3\nNs 200\nmap_Kd {eyes.name}\n"
+        path.with_suffix(".mtl").write_text(mtl, "utf-8")
         lines.append(f"mtllib {path.with_suffix('.mtl').name}")
     lines.append("o FitScan_Body")
     lines += [f"v {x:.6f} {y:.6f} {z:.6f}" for x, y, z in rig.vertices]
@@ -358,9 +379,13 @@ def write_obj(rig: RiggedMesh, path: Path) -> Path:
         lines += [f"f {a}//{a} {b}//{b} {c}//{c}" for a, b, c in faces]
     else:
         lines += [f"vt {u:.6f} {v:.6f}" for u, v in rig.uv]
-        lines.append("usemtl Haut")
-        lines += [f"f {a}/{ta}/{a} {b}/{tb}/{b} {c}/{tc}/{c}"
-                  for (a, b, c), (ta, tb, tc) in zip(faces, rig.face_uv + 1, strict=True)]
+        eye = rig.eye_faces if with_eyes else np.zeros(len(faces), bool)
+        for mat, sel in (("Haut", ~eye), ("Augen", eye)):
+            if not sel.any():
+                continue
+            lines.append(f"usemtl {mat}")
+            lines += [f"f {a}/{ta}/{a} {b}/{tb}/{b} {c}/{tc}/{c}"
+                      for (a, b, c), (ta, tb, tc) in zip(faces[sel], rig.face_uv[sel] + 1, strict=True)]
     path.write_text("\n".join(lines) + "\n", "utf-8")
     return path
 
@@ -396,12 +421,13 @@ def cascadeur_check(rig: RiggedMesh) -> list[str]:
 
 def export_body(model: BodyModel, params: BodyParams, folder: Path, name: str = "koerper",
                 presets: tuple[str, ...] = PRESETS, obj: bool = True,
-                skin: np.ndarray | None = None) -> dict[str, Path | list[str]]:
-    """Schreibt GLB je Namensschema und OBJ in einen Ordner. Gibt Pfade und Prüfhinweise zurück."""
+                skin: np.ndarray | None = None, eyes: np.ndarray | None = None) -> dict[str, Path | list[str]]:
+    """Schreibt GLB je Namensschema und OBJ in einen Ordner. Gibt Pfade und Prüfhinweise zurück.
+    eyes: eigenes Bild der Augäpfel (nur zusammen mit skin)."""
     folder = Path(folder)
     out: dict[str, Path | list[str]] = {}
     for preset in presets:
-        rig = build_rig(model, params, preset=preset, skin=skin)
+        rig = build_rig(model, params, preset=preset, skin=skin, eyes=eyes)
         if not rig.report.ok:
             raise ValueError(rig.report.summary())
         suffix = "" if preset == "anny" else f"_{preset}"

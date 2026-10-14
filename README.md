@@ -74,8 +74,10 @@ jedes Bild per optischem Fluss nach, damit Tattoos und Schrift aus allen Bildern
 übereinanderliegen. Feinheiten kommen aus den schärfsten, frontalsten Bildern, die Grundfarbe aus
 vielen. Nie gesehene Stellen (Fußsohlen, Achseln) werden aus der Umgebung aufgefüllt. Das Licht der
 Aufnahme steckt im Hautbild; ein Farbstich des Lichts wird an hellen, farblosen Flächen im Hintergrund
-(weiße Wand) gemessen und herausgerechnet. Ohne Hautbild (schneller): Häkchen in der Oberfläche
-entfernen oder `--ohne-hautbild`.
+(weiße Wand) gemessen und herausgerechnet. iPhone-Videos in HDR (Standard bei neueren iPhones)
+werden in voller Farbtiefe gelesen und auf normale Helligkeit umgerechnet; sonst wären helle Haut
+und Wände überstrahlt und Augenbrauen, Poren und Fältchen gingen verloren. Ohne Hautbild (schneller):
+Häkchen in der Oberfläche entfernen oder `--ohne-hautbild`.
 
 **Kopf:** Mit Kopfaufnahme sucht MediaPipe Face Landmarker (Apache 2.0) in jedem Bild 478
 Gesichtspunkte. Ein Bündelausgleich über alle Bilder ergibt daraus die Gesichtsform und die Kopflage
@@ -107,7 +109,8 @@ als Eingabe gleicht das aus. Die Abnahme mit echten Handyvideos steht noch aus.
 
 FitScan nutzt nur frei und kommerziell nutzbare Bausteine: Anny (Apache 2.0, Daten CC0),
 PyTorch (BSD), MediaPipe mit Pose- und Face-Landmarker-Modell (Apache 2.0), OpenCV (Apache 2.0),
-Gradio (Apache 2.0), trimesh (MIT), SciPy (BSD).
+Gradio (Apache 2.0), trimesh (MIT), SciPy (BSD), PyAV (BSD) mit FFmpeg-Bibliotheken (LGPL,
+unverändert als eigenständige Bibliotheken) für HDR-Videos.
 Kein SMPL. Blender wird nur als eigenständiges Programm aufgerufen. Die Modelle, die du mit
 FitScan erzeugst, gehören dir und können in andere Projekte übernommen werden.
 Prüfung: `python scripts/check_licenses.py`.

@@ -11,6 +11,7 @@ dependencies = [
     "scipy>=1.11",
     "trimesh>=4.0",
     "opencv-python>=4.9",
+    "av>=14",  # PyAV: iPhone-HDR-Videos in voller Farbtiefe lesen
 ]
 
 [project.optional-dependencies]

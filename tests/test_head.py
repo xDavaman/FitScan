@@ -114,7 +114,7 @@ def test_merge_head_skin_matches_colours():
     head[100:140, 100:140] = (60, 40, 30)  # Tattoo/Augenbraue im Kopfbild
     alpha = np.zeros((256, 256), np.float32)
     alpha[60:200, 60:200] = 1.0
-    out = H.merge_head_skin(body, head, alpha).astype(int)
+    out = H.merge_head_skin(body, head, alpha)[0].astype(int)
     # Hautton des Kopfes an den Körper angeglichen, Einzelheiten bleiben, außen unverändert
     assert np.abs(out[80, 80] - [180, 140, 120]).max() <= 3
     assert out[120, 120].max() < 90
@@ -144,3 +144,34 @@ def test_paint_eyes_draws_iris_and_pupil(model):
         assert (col[ring, 2] > col[ring, 0]).mean() > 0.8  # blaue Iris
         assert col[(cos > 0.4) & (cos < 0.6)].mean() > 150  # Augenweiß
         assert (a.reshape(-1)[m.texel[on]] == 1).all()
+
+
+def test_without_eyes_cuts_lid_openings():
+    pts = np.zeros((478, 2), np.float32)
+    for ring, cx in zip(H.EYE_RINGS, (30.0, 70.0), strict=True):
+        a = np.linspace(0, 2 * np.pi, len(ring), endpoint=False)
+        pts[list(ring)] = np.stack([cx + 10 * np.cos(a), 50 + 4 * np.sin(a)], -1)
+    out = H.without_eyes(np.ones((100, 100), np.uint8), pts)
+    assert out[50, 30] == 0 and out[50, 70] == 0  # Lidspalten
+    assert out[50, 50] == 1 and out[20, 30] == 1  # Nasenwurzel, Stirn
+
+
+def test_eye_texture_is_sharp(model):
+    """Eigenes Augenbild: Iris viele Texel breit, mit Pupille, Blick auf den gemessenen Punkt."""
+    from fitscan.texture import eye_uv_map, to_linear
+
+    verts = model.rest_numpy(BodyParams())["vertices"].astype(np.float64)
+    iris = to_linear(np.array([[70, 110, 150]], np.uint8))[0]
+    em = H.eye_vertex_masks(model)["L"]
+    c = verts[em].mean(0)
+    target = c + np.array([0.02, -0.1, -0.02])  # etwas nach außen und unten
+    img = H.eye_texture(model, verts, iris, None, gaze=target[None], size=1024)
+    m = eye_uv_map(model, 1024)
+    on = em[model.faces[m.face]].all(1)
+    p = (verts[model.faces[m.face[on]]] * m.bary[on][..., None]).sum(1) - c
+    col = img.reshape(-1, 3)[m.texel[on]].astype(int)
+    blue = (col[:, 2] > col[:, 0] + 20) & (col.sum(1) < 450)
+    assert blue.sum() > 1000  # Iris gut 40 Texel breit (im Hautbild bei 4096 nur gut 10)
+    look = p[blue].mean(0)
+    want = (target - c) / np.linalg.norm(target - c)
+    assert look @ want / np.linalg.norm(look) > 0.98  # Iris dort, wohin das Auge blickt

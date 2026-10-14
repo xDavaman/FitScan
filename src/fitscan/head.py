@@ -672,13 +672,17 @@ def _sparse(m) -> torch.Tensor:
 
 BLINK_LIMIT = 0.3  # Lider (halb) zu
 HEAD_FEATHER = 8.0  # Texel: weicher Übergang zwischen Kopf- und Körperhautbild
+HEAD_WEIGHT = (0.6, 0.95)  # Skinning-Gewicht des Kopfes: darunter Körperhautbild, darüber Kopfaufnahme
 
 
 def head_region(model: BodyModel) -> np.ndarray:
-    """(V,) Anteil des Kopfes je Punkt (Skinning-Gewicht von Kopf und Augen): 1 am Kopf, 0 am Hals."""
+    """(V,) Anteil der Kopfaufnahme je Punkt (Skinning-Gewicht von Kopf und Augen): 1 am Kopf, 0 am
+    Hals. Der Hals biegt sich in der Kopfaufnahme (Kopf gesenkt oder gehoben) und käme sonst mit dem
+    T-Shirt ins Hautbild; er kommt aus der Körperaufnahme."""
     sel = np.array([n == "head" or n.startswith("eye") for n in model.bone_labels])
     w = np.where(sel[model.vertex_bone_indices], model.vertex_bone_weights, 0.0).sum(1)
-    return np.clip((np.asarray(w, np.float64) - 0.3) / 0.6, 0.0, 1.0)
+    lo, hi = HEAD_WEIGHT
+    return np.clip((np.asarray(w, np.float64) - lo) / (hi - lo), 0.0, 1.0)
 
 
 def eyes_open(shapes: dict[str, float] | None) -> bool:
@@ -695,6 +699,7 @@ class HeadSkin:
     white: np.ndarray | None  # Farbe von Weiß in der Kopfaufnahme (linear, Grün = 1)
     iris: np.ndarray | None  # Irisfarbe (linear RGB)
     sclera: np.ndarray | None  # Farbe des Augenweiß (linear RGB)
+    eyes: np.ndarray | None = None  # eigenes, feines Bild der Augäpfel (texture.eye_layout)
 
 
 def bake_head(model: BodyModel, verts: np.ndarray, sol: FaceSolution, placement: HeadPlacement, video: Path,
@@ -705,7 +710,7 @@ def bake_head(model: BodyModel, verts: np.ndarray, sol: FaceSolution, placement:
     stecken größtenteils hinter den Lidern), sondern mit Iris- und Augenweißfarbe aus den Bildern
     neu gezeichnet."""
     from .texture import (
-        SEEN_FULL,
+        EYE_TEXTURE,
         TEXTURE_SIZE,
         Shot,
         TextureBaker,
@@ -738,16 +743,21 @@ def bake_head(model: BodyModel, verts: np.ndarray, sol: FaceSolution, placement:
             k = where[index]
             f = rgb.shape[1] / intr.width
             mask = masks.get(index) if masks else None
-            yield k, Shot(rgb=rgb, mask=np.ones((intr.height, intr.width), np.float32) if mask is None else mask,
-                          intr=intr, to_image=np.diag([f, f, 1.0]), vertices=verts, yaw=0.0, trans=np.zeros(3),
-                          camera=head @ sol.rotations[k].T + sol.translations[k], region=region)
+            mask = np.ones((intr.height, intr.width), np.float32) if mask is None else mask.astype(np.float32)
+            track = by_frame.get(index)
+            # Iris und Augenweiß gehören nicht auf die Lider, auch wenn die Lidspalte im Modell etwas
+            # anders liegt: die Lidspalte jedes Bildes zählt nicht (die Augäpfel werden gezeichnet)
+            seen = mask if track is None else without_eyes(mask, track.points)
+            yield k, mask, Shot(rgb=rgb, mask=seen, intr=intr, to_image=np.diag([f, f, 1.0]), vertices=verts,
+                                yaw=0.0, trans=np.zeros(3), camera=head @ sol.rotations[k].T + sol.translations[k],
+                                region=region)
 
     baker = TextureBaker(model, size)
     whites, iris, sclera = [], [], []
-    for n, (k, shot) in enumerate(shots()):
+    for n, (k, mask, shot) in enumerate(shots()):
         baker.add(shot)
-        person = None if shot.mask is None else (shot.mask > 0.5)
-        if person is not None and person.shape != shot.rgb.shape[:2]:
+        person = mask > 0.5
+        if person.shape != shot.rgb.shape[:2]:
             person = cv2.resize(person.astype(np.uint8), shot.rgb.shape[1::-1], interpolation=cv2.INTER_NEAREST)
         whites.append(white_samples(shot.rgb, person))
         track = by_frame.get(sol.frames[k])
@@ -763,7 +773,7 @@ def bake_head(model: BodyModel, verts: np.ndarray, sol: FaceSolution, placement:
         cintr = intr.scaled(k_c)
         refined = TextureBaker(model, size, reference=skin)
         shifts = []
-        for n, (_, shot) in enumerate(shots()):
+        for n, (_, _, shot) in enumerate(shots()):
             to_cmp = np.diag([k_c, k_c, 1.0]) @ np.linalg.inv(shot.to_image)
             photo = cv2.warpPerspective(shot.rgb, to_cmp, (cintr.width, cintr.height), flags=cv2.INTER_AREA)
             render, body = render_textured(verts, part, uv, face_uv, skin, 0.0, np.zeros(3), cintr,
@@ -781,8 +791,7 @@ def bake_head(model: BodyModel, verts: np.ndarray, sol: FaceSolution, placement:
     alpha = np.zeros(size * size, np.float32)
     # Der ganze Kopf kommt aus der Kopfaufnahme: was sie nicht zeigt (Scheitel, Hinterkopf), wird aus
     # der gesehenen Kopfhaut ergänzt; die Körperaufnahme zeigt den Kopf nur klein und von unten
-    on_head = (head_region(model)[faces[m.face]] * m.bary).sum(1)
-    alpha[m.texel] = np.maximum(np.clip(baker.base_w / SEEN_FULL, 0, 1), on_head)
+    alpha[m.texel] = (head_region(model)[faces[m.face]] * m.bary).sum(1)
     filled = np.zeros(size * size, bool)
     filled[m.texel] = True
     alpha = _pad(np.repeat(alpha.reshape(size, size, 1), 3, -1), filled.reshape(size, size), 12)[..., 0]
@@ -790,9 +799,14 @@ def bake_head(model: BodyModel, verts: np.ndarray, sol: FaceSolution, placement:
     sclera_c = np.median(np.concatenate(sclera), 0) if sum(map(len, sclera)) > 50 else None
     if log:
         log(f"Augen aus {len(iris)} Bildern mit offenen Lidern: Irisfarbe "
-            + ("unbekannt" if iris_c is None else "RGB " + "/".join(str(int(v)) for v in _srgb_u8(iris_c))) + ".")
-    skin, alpha = paint_eyes(model, verts, skin, alpha, iris_c, sclera_c)
-    return HeadSkin(skin, alpha, white_point(whites), iris_c, sclera_c)
+            + ("unbekannt" if iris_c is None else "RGB " + "/".join(str(int(v)) for v in _srgb_u8(iris_c)))
+            + ", Augenweiß " + ("unbekannt" if sclera_c is None else "RGB " + "/".join(
+                str(int(v)) for v in _srgb_u8(sclera_c))) + ".")
+    # Blickrichtung: Irismitten aus dem Bündelausgleich (über alle Bilder gemittelt)
+    gaze = placement.to_anny(sol.points[[c for c, *_ in _EYES]]) if len(sol.points) > max(c for c, *_ in _EYES) else None
+    skin, alpha = paint_eyes(model, verts, skin, alpha, iris_c, sclera_c, gaze)
+    eyes_img = eye_texture(model, verts, iris_c, sclera_c, gaze, size=min(EYE_TEXTURE, size))
+    return HeadSkin(skin, alpha, white_point(whites), iris_c, sclera_c, eyes_img)
 
 
 def _srgb_u8(lin: np.ndarray) -> np.ndarray:
@@ -801,15 +815,25 @@ def _srgb_u8(lin: np.ndarray) -> np.ndarray:
     return to_srgb(np.asarray(lin, np.float32)[None])[0]
 
 
-# Gesichtspunkte von MediaPipe: Irismitte, Irisrand, äußerer und innerer Augenwinkel
+# Gesichtspunkte von MediaPipe: Irismitte, Irisrand, äußerer und innerer Augenwinkel; Wangen
 _EYES = ((468, (469, 470, 471, 472), 33, 133), (473, (474, 475, 476, 477), 263, 362))
+_CHEEKS = (50, 280)
+SKIN_CHROMA = 0.035  # Abstand der Farbanteile (r, g, b)/Summe, ab dem ein Pixel nicht mehr Haut ist
+
+
+def _chroma(px: np.ndarray) -> np.ndarray:
+    px = px.astype(np.float32)
+    return px / np.maximum(px.sum(-1, keepdims=True), 1.0)
 
 
 def _eye_samples(rgb: np.ndarray, pts: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Pixel der Iris (ohne Pupille und ohne den vom Oberlid beschatteten Teil) und des Augenweiß
-    (zwischen Iris und Augenwinkeln) eines Bildes; pts in Pixeln dieses Bildes."""
+    """Pixel der Iris (ohne Pupille, ohne den vom Oberlid beschatteten Teil und ohne Lid, das die Iris
+    verdeckt) und des Augenweiß (zwischen Iris und Augenwinkeln) eines Bildes; pts in Pixeln."""
     iris, sclera = [], []
     h, w = rgb.shape[:2]
+    cheeks = [rgb[max(int(y) - 6, 0):int(y) + 7, max(int(x) - 6, 0):int(x) + 7].reshape(-1, 3)
+              for x, y in pts[list(_CHEEKS)]]
+    skin = np.concatenate(cheeks) if len(pts) > max(_CHEEKS) else np.zeros((0, 3), np.uint8)
     for center, ring, outer, inner in _EYES:
         c = pts[center]
         r = float(np.mean(np.linalg.norm(pts[list(ring)] - c, axis=1)))
@@ -819,15 +843,27 @@ def _eye_samples(rgb: np.ndarray, pts: np.ndarray) -> tuple[np.ndarray, np.ndarr
         y0, y1 = int(max(c[1] - r, 0)), int(min(c[1] + r + 1, h))
         yy, xx = np.mgrid[y0:y1, x0:x1]
         d = np.hypot(xx - c[0], yy - c[1]) / r
-        keep = (d > 0.45) & (d < 0.85) & (yy > c[1] - 0.3 * r)
-        iris.append(rgb[yy[keep], xx[keep]])
+        keep = (d > 0.4) & (d < 0.85) & (yy > c[1] - 0.3 * r) & (yy < c[1] + 0.5 * r)
+        px = rgb[yy[keep], xx[keep]]
+        if len(skin) and len(px):
+            # Lider haben die Farbe der Haut und sind heller als die Iris
+            off = np.linalg.norm(_chroma(px) - np.median(_chroma(skin), 0), axis=1)
+            dark = px.astype(np.float32).sum(-1) < 0.9 * float(np.median(skin.astype(np.float32).sum(-1)))
+            px = px[(off > SKIN_CHROMA) & dark]
+        iris.append(px)
         for corner in (outer, inner):
             v = pts[corner] - c
             length = float(np.linalg.norm(v))
             for t in np.linspace(min((r + 2) / max(length, 1), 0.9), 0.7, 5):
                 x, y = (c + t * v).astype(int)
                 if 1 <= x < w - 1 and 1 <= y < h - 1:
-                    sclera.append(rgb[y - 1:y + 2, x - 1:x + 2].reshape(-1, 3))
+                    px = rgb[y - 1:y + 2, x - 1:x + 2].reshape(-1, 3)
+                    if len(skin):
+                        # Augenweiß ist heller und farbloser als die Haut (sonst Lid oder Tränenkarunkel)
+                        off = np.linalg.norm(_chroma(px) - np.median(_chroma(skin), 0), axis=1)
+                        bright = px.astype(np.float32).sum(-1) > 0.75 * float(np.median(skin.astype(np.float32).sum(-1)))
+                        px = px[(off > 2 * SKIN_CHROMA) & bright & (_chroma(px)[:, 0] < np.median(_chroma(skin)[:, 0]))]
+                    sclera.append(px)
     empty = np.zeros((0, 3), np.uint8)
     return (np.concatenate(iris) if iris else empty), (np.concatenate(sclera) if sclera else empty)
 
@@ -839,20 +875,68 @@ DEFAULT_IRIS = np.array([0.12, 0.16, 0.22], np.float32)  # linear, blaugrau
 DEFAULT_SCLERA = np.array([0.62, 0.58, 0.55], np.float32)
 
 
+# Lidspalten (Umriss der Lidränder) in MediaPipe-Gesichtspunkten
+EYE_RINGS = ((33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246),
+             (263, 249, 390, 373, 374, 380, 381, 382, 362, 398, 384, 385, 386, 387, 388, 466))
+EYE_CUT = 2  # Pixel: Lidspalte so viel größer ausschneiden
+
+
+def without_eyes(mask: np.ndarray, pts: np.ndarray) -> np.ndarray:
+    """Personenmaske ohne die Lidspalten (pts: Gesichtspunkte in Pixeln dieser Maske)."""
+    out = mask.astype(np.float32, copy=True)
+    for ring in EYE_RINGS:
+        poly = np.round(pts[list(ring), :2]).astype(np.int32)
+        cv2.fillPoly(out, [poly], 0.0)
+        cv2.polylines(out, [poly], True, 0.0, thickness=2 * EYE_CUT + 1)
+    return out
+
+
 def paint_eyes(model: BodyModel, verts: np.ndarray, skin: np.ndarray, alpha: np.ndarray,
-               iris: np.ndarray | None, sclera: np.ndarray | None) -> tuple[np.ndarray, np.ndarray]:
-    """Augäpfel im Hautbild zeichnen: Augenweiß, Iris mit Speichen und dunklem Rand, Pupille."""
-    from .texture import to_srgb, uv_map
+               iris: np.ndarray | None, sclera: np.ndarray | None,
+               gaze: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """Augäpfel im Hautbild zeichnen: Augenweiß, Iris mit Speichen und dunklem Rand, Pupille.
+    gaze: Punkte (Anny), auf die die Augen blicken (je Auge der nächstgelegene, z. B. die gemessenen
+    Irismitten); ohne: geradeaus. Speichen nur, wenn das Bild sie auflösen kann."""
+    from .texture import uv_map
 
     size = skin.shape[0]
     m = uv_map(model, size)
-    faces = model.faces
-    iris = DEFAULT_IRIS if iris is None else np.asarray(iris, np.float32)
-    sclera = DEFAULT_SCLERA if sclera is None else np.asarray(sclera, np.float32)
-    # Augenweiß wirkt im Video durch Schatten oft grau; etwas aufhellen, Farbton behalten
-    sclera = sclera * min(1.6, 0.6 / max(float(sclera.mean()), 1e-3))
     out = skin.reshape(-1, 3).copy()
     a = alpha.reshape(-1).copy()
+    island = _paint_balls(model, verts, m, out, iris, sclera, gaze)
+    a[island] = 1.0
+    # Ränder der Augen-Inseln auffüllen, sonst schimmert beim Verkleinern Haut durch
+    return _grow(out.reshape(size, size, 3), island.reshape(size, size), 2), a.reshape(size, size)
+
+
+def eye_texture(model: BodyModel, verts: np.ndarray, iris: np.ndarray | None, sclera: np.ndarray | None,
+                gaze: np.ndarray | None = None, size: int | None = None) -> np.ndarray:
+    """Eigenes, feines Bild der Augäpfel (Layout: texture.eye_layout), (size, size, 3) uint8 RGB."""
+    from .texture import EYE_TEXTURE, eye_uv_map
+
+    size = size or EYE_TEXTURE
+    m = eye_uv_map(model, size)
+    out = np.empty((size * size, 3), np.uint8)
+    out[:] = _srgb_u8(_sclera(sclera) * 0.8)
+    island = _paint_balls(model, verts, m, out, iris, sclera, gaze)
+    return _grow(out.reshape(size, size, 3), island.reshape(size, size), 4)
+
+
+def _sclera(sclera: np.ndarray | None) -> np.ndarray:
+    sclera = DEFAULT_SCLERA if sclera is None else np.asarray(sclera, np.float32)
+    # Augenweiß wirkt im Video durch Schatten oft grau; etwas aufhellen, Farbton behalten
+    return sclera * min(1.6, 0.6 / max(float(sclera.mean()), 1e-3))
+
+
+def _paint_balls(model: BodyModel, verts: np.ndarray, m, out: np.ndarray, iris: np.ndarray | None,
+                 sclera: np.ndarray | None, gaze: np.ndarray | None) -> np.ndarray:
+    """Beide Augäpfel in out (flach, size*size x 3) zeichnen; gibt die bemalten Texel (bool) zurück."""
+    from .texture import to_srgb
+
+    faces = model.faces
+    iris = DEFAULT_IRIS if iris is None else np.asarray(iris, np.float32)
+    sclera = _sclera(sclera)
+    island = np.zeros(len(out), bool)
     for em in eye_vertex_masks(model).values():
         on = em[faces[m.face]].all(1)
         if not on.any():
@@ -862,6 +946,10 @@ def paint_eyes(model: BodyModel, verts: np.ndarray, skin: np.ndarray, alpha: np.
         front = ball[np.argmin(ball[:, 1])] - c  # Anny blickt nach -Y
         radius = float(np.linalg.norm(front))
         front /= radius
+        if gaze is not None and len(gaze):
+            target = gaze[np.argmin(np.linalg.norm(gaze - c, axis=1))] - c
+            if target @ front > 0.7 * np.linalg.norm(target):  # höchstens etwa 45° neben geradeaus
+                front = target / np.linalg.norm(target)
         p = (verts[faces[m.face[on]]] * m.bary[on][..., None]).sum(1) - c
         cos = (p @ front) / np.maximum(np.linalg.norm(p, axis=1), 1e-9)
         theta = np.arccos(np.clip(cos, -1, 1))
@@ -870,7 +958,10 @@ def paint_eyes(model: BodyModel, verts: np.ndarray, skin: np.ndarray, alpha: np.
         t_iris = math.asin(min(IRIS_RADIUS / radius, 0.95))
         t_pupil = math.asin(min(PUPIL_RADIUS / radius, 0.5))
         rel = theta / t_iris
-        streak = 1 + 0.18 * np.sin(37 * phi + 3 * np.sin(11 * phi)) * np.clip(rel * 1.5, 0, 1)
+        # Texel über den Irisdurchmesser: unter etwa 40 würden die Speichen nur flimmern
+        across = 2 * t_iris * radius * np.sqrt(on.sum() / (4 * np.pi * radius * radius))
+        detail = float(np.clip((across - 40) / 60, 0, 1))
+        streak = 1 + 0.18 * detail * np.sin(37 * phi + 3 * np.sin(11 * phi)) * np.clip(rel * 1.5, 0, 1)
         col = iris[None] * streak[:, None]
         col = col * (1 - 0.55 * _smooth(0.78, 1.0, rel))[:, None]  # dunkler Rand der Iris
         col = col * (1 - 0.25 * (1 - _smooth(t_pupil, 1.8 * t_pupil, theta)))[:, None]
@@ -880,17 +971,20 @@ def paint_eyes(model: BodyModel, verts: np.ndarray, skin: np.ndarray, alpha: np.
         lin = (1 - mix) * col + mix * white
         sel = m.texel[on]
         out[sel] = to_srgb(lin.astype(np.float32))
-        a[sel] = 1.0
-    # Ränder der Augen-Inseln auffüllen, sonst schimmert beim Verkleinern Haut durch
-    img = out.reshape(size, size, 3)
-    island = np.zeros(size * size, np.float32)
-    for em in eye_vertex_masks(model).values():
-        island[m.texel[em[faces[m.face]].all(1)]] = 1
-    island = island.reshape(size, size)
-    grow = (cv2.dilate(island, np.ones((5, 5), np.uint8)) > 0) & (island == 0)
-    near = cv2.dilate(img * island[..., None].astype(np.uint8), np.ones((5, 5), np.uint8))
-    img[grow] = near[grow]
-    return img, a.reshape(size, size)
+        island[sel] = True
+    return island
+
+
+def _grow(img: np.ndarray, island: np.ndarray, steps: int) -> np.ndarray:
+    """Farbe der Inseln um steps * 2 Texel nach außen fortsetzen."""
+    island = island.astype(np.uint8)
+    kernel = np.ones((5, 5), np.uint8)
+    for _ in range(steps):
+        grow = (cv2.dilate(island, kernel) > 0) & (island == 0)
+        near = cv2.dilate(img * island[..., None], kernel)
+        img[grow] = near[grow]
+        island = island | grow.astype(np.uint8)
+    return img
 
 
 def _smooth(lo: float, hi: float, x: np.ndarray) -> np.ndarray:
@@ -899,10 +993,12 @@ def _smooth(lo: float, hi: float, x: np.ndarray) -> np.ndarray:
 
 
 def merge_head_skin(body: np.ndarray, head: np.ndarray, alpha: np.ndarray, body_white: np.ndarray | None = None,
-                    head_white: np.ndarray | None = None, log: Log | None = None) -> np.ndarray:
+                    head_white: np.ndarray | None = None, log: Log | None = None,
+                    eyes: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray | None]:
     """Kopf-Hautbild in das Körper-Hautbild einsetzen. Erst nimmt der Weißabgleich beider Aufnahmen
     den Farbstich des Lichts heraus (falls bekannt), dann wird die Helligkeit des Kopfes an den
-    Körper angeglichen, damit am Hals keine Kante entsteht."""
+    Körper angeglichen, damit am Hals keine Kante entsteht. Das Augenbild (Farben aus der
+    Kopfaufnahme) wird genauso angeglichen. Gibt (Hautbild, Augenbild) zurück."""
     from .texture import to_linear, to_srgb
 
     if head.shape != body.shape:
@@ -922,7 +1018,10 @@ def merge_head_skin(body: np.ndarray, head: np.ndarray, alpha: np.ndarray, body_
     if log:
         log("Kopf an den Körper angeglichen (Rot/Grün/Blau " + "/".join(f"{g:.2f}" for g in gain) + ").")
     a = cv2.GaussianBlur(alpha.astype(np.float32), (0, 0), HEAD_FEATHER)[..., None]
-    return to_srgb(a * lh * gain + (1 - a) * lb)
+    if eyes is not None:
+        le = to_linear(eyes) * gain
+        eyes = to_srgb(le if head_white is None else le / np.asarray(head_white, np.float32))
+    return to_srgb(a * lh * gain + (1 - a) * lb), eyes
 
 
 def compare_head(model: BodyModel, verts: np.ndarray, sol: FaceSolution, placement: HeadPlacement, video: Path,

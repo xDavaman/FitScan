@@ -121,10 +121,14 @@ def best_recording(recordings: list[Recording], log: Log | None = None) -> Recor
 
 
 def _export(model: BodyModel, params: BodyParams, folder: Path, presets,
-            skin: np.ndarray | None = None) -> tuple[dict[str, str], list[str]]:
-    out = export_body(model, params, folder, presets=presets, skin=skin)
+            skin: np.ndarray | None = None, eyes: np.ndarray | None = None) -> tuple[dict[str, str], list[str]]:
+    out = export_body(model, params, folder, presets=presets, skin=skin, eyes=eyes)
     hints = list(out.pop("hinweise", []))
     return {k: str(v) for k, v in out.items()}, hints
+
+
+def _read_rgb(path: Path) -> np.ndarray | None:
+    return cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2RGB) if Path(path).exists() else None
 
 
 def body_from_measurements(person: Person, name: str, store: Store | None = None,
@@ -207,10 +211,11 @@ def scan(source: Path | list[Path], person: Person, name: str, store: Store | No
         "bilder": [r.to_json() for r in frame_results],
         "quelle": [str(p) for p in paths],
     }
+    eyes = None
     if head_video:
-        params, skin, quality["kopf"] = head_stage(model, params, Path(head_video), skin, folder,
-                                                   texture=texture, log=log)
-    files, hints = _export(model, params, folder, presets, skin)
+        params, skin, eyes, quality["kopf"] = head_stage(model, params, Path(head_video), skin, folder,
+                                                         texture=texture, log=log)
+    files, hints = _export(model, params, folder, presets, skin, eyes)
     record = store.save_scan(rec.id, folder, params, person.measures, measures, quality,
                              ("video" if is_video else "bilder") + ("+kopf" if head_video else ""), files)
     (folder / "bilder.json").write_text(json.dumps(quality["bilder"], indent=2), "utf-8")
@@ -399,9 +404,11 @@ def fit_sheet(results: list[FrameFitResult], height: int = 360, per_row: int = 6
 
 def head_stage(model: BodyModel, params: BodyParams, video: Path, body_skin: np.ndarray | None,
                folder: Path | None = None, body_white: np.ndarray | None = None, texture: bool = True,
-               size: int | None = None, log: Log | None = None) -> tuple[BodyParams, np.ndarray | None, dict]:
-    """Kopf aus einer Kopfaufnahme: Gesichtsform, Schädel und Ohren als Feinform, Gesicht und Augen
-    als Hautbild (eingesetzt ins Körper-Hautbild). Speichert kopf.json, kopfvergleich.jpg, haut.jpg."""
+               size: int | None = None, log: Log | None = None
+               ) -> tuple[BodyParams, np.ndarray | None, np.ndarray | None, dict]:
+    """Kopf aus einer Kopfaufnahme: Gesichtsform, Schädel und Ohren als Feinform, Gesicht als
+    Hautbild (eingesetzt ins Körper-Hautbild), Augen als eigenes Bild. Gibt (Parameter, Hautbild,
+    Augenbild, Kennzahlen) zurück; speichert kopf.json, kopfvergleich.jpg, haut.jpg, augen.jpg."""
     from . import head as H
     from .fit import repair_offsets
 
@@ -432,23 +439,26 @@ def head_stage(model: BodyModel, params: BodyParams, video: Path, body_skin: np.
         "nase_kinn_mm": round(float(np.linalg.norm(pts[H.NOSE_TIP] - pts[152])) * 1000, 1),
         "verschiebung_max_mm": round(float(np.linalg.norm(disp, axis=1).max()) * 1000, 1),
     }
-    skin = body_skin
+    skin, eyes = body_skin, None
     if texture:
         log("Hautbild des Kopfes aus der Kopfaufnahme …")
         hs = H.bake_head(model, new, sol, place, video, masks, tracks, size=size, log=log)
-        skin = H.merge_head_skin(hs.skin if body_skin is None else body_skin, hs.skin, hs.alpha,
-                                 body_white, hs.white, log=log)
+        skin, eyes = H.merge_head_skin(hs.skin if body_skin is None else body_skin, hs.skin, hs.alpha,
+                                       body_white, hs.white, log=log, eyes=hs.eyes)
         info["weisspunkt_kopf"] = None if hs.white is None else [round(float(w), 4) for w in hs.white]
         if folder is not None:
             cv2.imwrite(str(Path(folder) / "haut.jpg"), cv2.cvtColor(skin, cv2.COLOR_RGB2BGR),
                         [cv2.IMWRITE_JPEG_QUALITY, 94])
+            if eyes is not None:
+                cv2.imwrite(str(Path(folder) / "augen.jpg"), cv2.cvtColor(eyes, cv2.COLOR_RGB2BGR),
+                            [cv2.IMWRITE_JPEG_QUALITY, 94])
             sheet = H.compare_head(model, new, sol, place, video, skin)
             if sheet is not None:
                 cv2.imwrite(str(Path(folder) / "kopfvergleich.jpg"), cv2.cvtColor(sheet, cv2.COLOR_RGB2BGR),
                             [cv2.IMWRITE_JPEG_QUALITY, 90])
     if folder is not None:
         (Path(folder) / "kopf.json").write_text(json.dumps(info, indent=1), "utf-8")
-    return out, skin, info
+    return out, skin, eyes, info
 
 
 def video_white(path: Path, samples: int = 8) -> np.ndarray | None:
@@ -479,8 +489,8 @@ def add_head(record: ScanRecord, video: Path, store: Store | None = None, preset
             if sources and sources[0].exists() and sources[0].suffix.lower() not in (".jpg", ".jpeg", ".png"):
                 white = video_white(sources[0])
     folder = store.new_scan_folder(record.person_id)
-    params, skin, info = head_stage(model, params, video, skin, folder, body_white=white, log=log)
-    files, hints = _export(model, params, folder, presets, skin)
+    params, skin, eyes, info = head_stage(model, params, video, skin, folder, body_white=white, log=log)
+    files, hints = _export(model, params, folder, presets, skin, eyes)
     quality = {**record.quality, "kopf": info, "kopfvideo": str(video), "aus_scan": record.id}
     new = store.save_scan(record.person_id, folder, params, record.inputs, record.measures, quality,
                           record.source.split("+")[0] + "+kopf", files)
@@ -499,10 +509,9 @@ def reexport(record: ScanRecord, presets: tuple[str, ...] = PRESETS, device: str
         for key, value in changes.items():
             params.phenotype[key] = float(value)
         suffix = "_" + "_".join(f"{k}{v:.2f}" for k, v in changes.items())
-    skin = None
-    if (record.folder / "haut.jpg").exists():
-        skin = cv2.cvtColor(cv2.imread(str(record.folder / "haut.jpg")), cv2.COLOR_BGR2RGB)
-    files, hints = _export(model, params, record.folder / f"export{suffix}", presets, skin)
+    skin, eyes = (_read_rgb(record.folder / f) for f in ("haut.jpg", "augen.jpg"))
+    files, hints = _export(model, params, record.folder / f"export{suffix}", presets, skin,
+                           eyes if skin is not None else None)
     for h in hints:
         log(h)
     return files
