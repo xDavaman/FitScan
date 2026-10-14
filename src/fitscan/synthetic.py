@@ -102,8 +102,11 @@ def render_shaded(vertices: np.ndarray, faces: np.ndarray, yaw: float, trans: np
 
 
 def film_video(model: BodyModel, params: BodyParams, path, arm_deg: float = 0.0, seconds: float = 12.0,
-               fps: float = 10.0, width: int = 540, height: int = 960, distance: float = 2.2):
-    """Künstliches Drehvideo eines Testkörpers (eine volle Umdrehung) als MP4."""
+               fps: float = 10.0, width: int = 540, height: int = 960, distance: float = 2.2,
+               skin: np.ndarray | None = None):
+    """Künstliches Drehvideo eines Testkörpers (eine volle Umdrehung) als MP4.
+
+    skin: Hautbild auf Annys UV-Karte (RGB); ohne wird einfarbig schattiert."""
     with torch.no_grad():
         rest = model.rest(model.phenotype_tensor(params), model.local_tensor(params), None, params.scale)
         pose = torch.eye(4)[None, None].repeat(1, len(model.bone_labels), 1, 1)
@@ -117,7 +120,14 @@ def film_video(model: BodyModel, params: BodyParams, path, arm_deg: float = 0.0,
     n = int(seconds * fps)
     for i in range(n):
         yaw = 2 * math.pi * i / n
-        rgb = render_shaded(verts, model.faces, yaw, np.array([0.0, zc, distance]), intr)
+        trans = np.array([0.0, zc, distance])
+        if skin is None:
+            rgb = render_shaded(verts, model.faces, yaw, trans, intr)
+        else:
+            from .texture import render_textured
+
+            rgb = render_textured(verts, model.faces, model.anny.texture_coordinates.cpu().numpy(),
+                                  model.anny.face_texture_coordinate_indices.cpu().numpy(), skin, yaw, trans, intr)
         writer.write(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
     writer.release()
     return path

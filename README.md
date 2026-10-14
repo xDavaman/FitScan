@@ -51,12 +51,22 @@ Jeder Scan landet in `daten/personen/<name>/scans/<datum>/`:
 |---|---|
 | `koerper.glb` | Modell mit Skelett, Gewichten und Formreglern, Knochennamen wie Anny (`upperarm01.L`) – für Blender |
 | `koerper_unreal.glb` | dasselbe mit Knochennamen im Unreal-Stil (`upperarm_l`) – für Cascadeur, Unreal, Unity |
-| `koerper.obj` | nur das Netz (z. B. für 3D-Druck oder Bildhauerprogramme) |
+| `koerper.obj` | nur das Netz (z. B. für 3D-Druck oder Bildhauerprogramme), mit `.mtl` und Hautbild |
+| `haut.jpg` | Hautbild aus dem Video (Hautton, Tattoos, Muttermale, Kleidung) auf Annys UV-Karte, 4096 × 4096 |
+| `ansichten.json` | Lage und Haltung des Körpers in jedem verwendeten Videobild |
 | `params.json`, `offsets.npy` | Körperparameter; daraus wird jeder Re-Scan weitergerechnet |
 | `scan.json`, `bilder.json` | Maße, Eingaben, Qualitätsbericht, Passgenauigkeit je Bild |
 
 Eigenschaften: echte Größe in Metern, Füße auf dem Boden, Y oben, geschlossenes Netz ohne Löcher,
 A-Pose als Ruhepose, symmetrisches Skelett, Formregler `weight_up/down` und `muscle_up/down`.
+
+**Hautbild:** Jedes Videobild wird einzeln ausgerichtet (Drehung, Lage, Haltung von Armen und
+Beinen), dann werden die Farben auf die Körperoberfläche übertragen. Ein zweiter Durchgang schiebt
+jedes Bild per optischem Fluss nach, damit Tattoos und Schrift aus allen Bildern genau
+übereinanderliegen. Feinheiten kommen aus den schärfsten, frontalsten Bildern, die Grundfarbe aus
+vielen. Nie gesehene Stellen (Fußsohlen, Achseln) werden aus der Umgebung aufgefüllt. Das Licht der
+Aufnahme steckt im Hautbild; das Gesicht passt erst mit eigener Kopfaufnahme genau. Ohne Hautbild
+(schneller): Häkchen in der Oberfläche entfernen oder `--ohne-hautbild`.
 
 - **Blender:** Datei → Importieren → glTF 2.0 → `koerper.glb`.
 - **Cascadeur:** `koerper_unreal.glb` importieren (oder FBX, siehe unten), dann Quick Rigging.

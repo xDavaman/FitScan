@@ -30,6 +30,7 @@ Technischer Plan: https://claude.ai/code/artifact/e834733a-d72b-4a65-bdea-881002
 | `segment.py` | optionale Kantennachschärfung der Maske mit GrabCut (Standard aus, hilft nur bei unruhigem Hintergrund) |
 | `quality.py` | Scan-Assistent: Licht, Schärfe, Abstand, Position, A-Pose, Stillhalten, Blickwinkel |
 | `video.py` | Video/Fotos einlesen, prüfen, bestes Bild pro Blickwinkel wählen |
+| `texture.py` | Hautbild: UV-Karte, Sichtbarkeit je Bild, Farben in zwei Lagen mischen, Lücken füllen, Feinausrichtung per optischem Fluss, Vorschau-Rendering |
 | `mesh_check.py` | wasserdicht, Orientierung, kaputte oder umgeklappte Dreiecke |
 | `export.py` | eigener GLB-Exporter (Skelett, Gewichte, Formregler), OBJ, Cascadeur-Prüfung, Namensschemata |
 | `blender.py`, `blender_glb_to_fbx.py` | optional FBX/.blend über installiertes Blender |
@@ -63,6 +64,11 @@ uv pip install -p .venv/bin/python -e ".[prototyp,dev]"
 - Unter Linux braucht MediaPipe `libegl1 libgles2 libgl1`.
 - Anny legt beim ersten Start einen Zwischenspeicher unter `~/.cache/anny` an (gut 1 GB), danach schnell.
 - Ohne eigenes Video testen: `synthetic.film()` (Silhouetten) oder `synthetic.film_video()` (gerendertes Drehvideo).
+- Hautbild: `fit.fit_views` richtet jedes Bild bei fester Form aus (eigene Haltung je Bild),
+  `pipeline.bake_skin` überträgt die Farben. GLB braucht dafür doppelte Punkte an UV-Nähten
+  (`RiggedMesh.split_at_seams`), Blender führt sie beim Import wieder zusammen (`merge_vertices`).
+- iPhone-Videos sind HDR (HLG). OpenCV liest sie ohne Tonemapping; die Farben sehen dabei
+  natürlich aus, ffmpeg-Tonemapping wirkte flauer.
 - Körperpunkt-Versatz MediaPipe → Anny-Gelenke: `src/fitscan/data/keypoint_offsets.json`,
   neu berechnen mit `scripts/calibrate_keypoints.py`.
 - Gradio `Model3D` zeigt keine Werte aus Generatoren an; Vorschau daher per `.then()` setzen.

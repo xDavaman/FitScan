@@ -120,8 +120,9 @@ def best_recording(recordings: list[Recording], log: Log | None = None) -> Recor
     return best
 
 
-def _export(model: BodyModel, params: BodyParams, folder: Path, presets) -> tuple[dict[str, str], list[str]]:
-    out = export_body(model, params, folder, presets=presets)
+def _export(model: BodyModel, params: BodyParams, folder: Path, presets,
+            skin: np.ndarray | None = None) -> tuple[dict[str, str], list[str]]:
+    out = export_body(model, params, folder, presets=presets, skin=skin)
     hints = list(out.pop("hinweise", []))
     return {k: str(v) for k, v in out.items()}, hints
 
@@ -147,8 +148,10 @@ def body_from_measurements(person: Person, name: str, store: Store | None = None
 
 def scan(source: Path | list[Path], person: Person, name: str, store: Store | None = None,
          presets: tuple[str, ...] = PRESETS, device: str | None = None, fps: float = 4.0,
-         refine: bool = False, log: Log | None = None) -> ScanResult:
+         refine: bool = False, texture: bool = True, log: Log | None = None) -> ScanResult:
     """Video oder Fotos -> angepasster, riggbarer Körper als GLB/OBJ, gespeichert beim Namen.
+
+    texture: Hautbild (Farben, Tattoos, Muttermale) aus den Bildern aufs Modell übertragen.
 
     refine: Maskenkanten mit GrabCut nachschärfen. Hilft bei unruhigem Hintergrund, schadet bei
     ruhigem Hintergrund leicht (Testvideo: Brust 2,5 statt 3,2 cm Abweichung ohne Nachschärfen).
@@ -176,19 +179,8 @@ def scan(source: Path | list[Path], person: Person, name: str, store: Store | No
     if refine:
         log("Kanten der Personenmaske werden nachgeschärft (unruhiger Hintergrund) …")
     masks = [refine_mask(a.rgb, a.obs.mask) if refine else a.obs.mask for a in chosen]
-    keypoints = [a.obs.keypoints for a in chosen]
-    h, w = chosen[0].rgb.shape[:2]
-    intr = Intrinsics.phone_default(w, h)
-    tilt = level.estimate([a.rgb for a in chosen], masks, intr)
-    if tilt is not None and max(abs(tilt.pitch_deg), abs(tilt.roll_deg)) >= level.MIN_TILT_DEG:
-        direction = "oben" if tilt.pitch_deg > 0 else "unten"
-        log(f"Handy war um {abs(tilt.pitch_deg):.0f}° nach {direction} gekippt "
-            f"(seitlich {tilt.roll_deg:+.0f}°), wird ausgeglichen.")
-        src, intr = intr, level.leveled_intrinsics(tilt, intr, masks)
-        warped = [level.apply(tilt, src, intr, m, k) for m, k in zip(masks, keypoints, strict=True)]
-        masks, keypoints = [m for m, _ in warped], [k for _, k in warped]
-    fit_frames = [FitFrame(mask=m, intr=intr, keypoints=k, yaw_init=a.quality.yaw)
-                  for a, m, k in zip(chosen, masks, keypoints, strict=True)]
+    cam = level_camera(chosen, masks, log)
+    fit_frames = cam.fit_frames(chosen, masks)
 
     model = BodyModel.get(device)
     rec = store.save_person(name, person.gender, person.age_years, person.measures)
@@ -203,7 +195,10 @@ def scan(source: Path | list[Path], person: Person, name: str, store: Store | No
     params, measures, frame_results = fit_to_frames(model, person, fit_frames, init=init, log=log)
 
     folder = store.new_scan_folder(rec.id)
-    files, hints = _export(model, params, folder, presets)
+    skin = None
+    if texture:
+        skin = bake_skin(model, params, recording, cam, folder, log=log)
+    files, hints = _export(model, params, folder, presets, skin)
     quality = {
         "bericht": report.to_json(),
         "bilder": [r.to_json() for r in frame_results],
@@ -217,6 +212,135 @@ def scan(source: Path | list[Path], person: Person, name: str, store: Store | No
         cv2.imwrite(str(folder / "passung.png"), cv2.cvtColor(sheet, cv2.COLOR_RGB2BGR))
     log(f"Fertig: {folder}")
     return ScanResult(record, params, measures, report, frame_results, files, hints)
+
+
+# ------------------------------------------------------------------------- Kamera und Hautbild
+
+
+@dataclasses.dataclass
+class LevelCamera:
+    """Kamera der Analysebilder und, falls das Handy gekippt war, die gerade ausgerichtete."""
+
+    source: Intrinsics  # Kamera der Analysebilder
+    intr: Intrinsics  # gerade Kamera, in der angepasst wird
+    tilt: level.Leveling | None
+
+    def warp(self, mask: np.ndarray, keypoints: np.ndarray | None):
+        if self.tilt is None:
+            return mask, keypoints
+        return level.apply(self.tilt, self.source, self.intr, mask, keypoints)
+
+    def fit_frames(self, frames: list, masks: list[np.ndarray] | None = None) -> list[FitFrame]:
+        masks = masks or [a.obs.mask for a in frames]
+        out = []
+        for a, m in zip(frames, masks, strict=True):
+            mask, kp = self.warp(m, a.obs.keypoints)
+            out.append(FitFrame(mask=mask, intr=self.intr, keypoints=kp, yaw_init=a.quality.yaw))
+        return out
+
+    def to_image(self, full_width: int) -> np.ndarray:
+        """3x3: Pixel der geraden Kamera -> Pixel im Originalbild der Breite full_width."""
+        f = full_width / self.source.width
+        scale = np.diag([f, f, 1.0])
+        if self.tilt is None:
+            return scale
+        return scale @ np.linalg.inv(self.tilt.homography(self.source, self.intr))
+
+
+def level_camera(frames: list, masks: list[np.ndarray], log: Log | None = None) -> LevelCamera:
+    log = log or _noop
+    h, w = frames[0].rgb.shape[:2]
+    intr = Intrinsics.phone_default(w, h)
+    tilt = level.estimate([a.rgb for a in frames], masks, intr)
+    if tilt is None or max(abs(tilt.pitch_deg), abs(tilt.roll_deg)) < level.MIN_TILT_DEG:
+        return LevelCamera(intr, intr, None)
+    direction = "oben" if tilt.pitch_deg > 0 else "unten"
+    log(f"Handy war um {abs(tilt.pitch_deg):.0f}° nach {direction} gekippt "
+        f"(seitlich {tilt.roll_deg:+.0f}°), wird ausgeglichen.")
+    return LevelCamera(intr, level.leveled_intrinsics(tilt, intr, masks), tilt)
+
+
+def bake_skin(model: BodyModel, params: BodyParams, recording: Recording, cam: LevelCamera,
+              folder: Path | None = None, max_frames: int = 48, size: int | None = None,
+              views: list | None = None, fine_align: bool = True,
+              log: Log | None = None) -> np.ndarray | None:
+    """Hautbild aus den Bildern einer Aufnahme. Speichert haut.jpg und ansichten.json im Ordner.
+
+    Erst werden die Bilder über Silhouette und Körperpunkte ausgerichtet (Lage und Haltung je
+    Bild). fine_align: danach ein zweiter Durchgang, in dem das vorläufige Hautbild in jedes
+    Videobild gerendert und per optischem Fluss nachgeschoben wird, damit Tattoos, Schrift und
+    Kanten aus allen Bildern genau übereinander liegen."""
+    from .fit import fit_views, view_vertices
+    from .texture import TEXTURE_SIZE, Shot, TextureBaker, alignment_flow, render_textured
+    from .video import read_full_frames, read_images, select_for_texture
+
+    log = log or _noop
+    frames = select_for_texture(recording.frames, max_frames)
+    if len(frames) < 4:
+        log("Zu wenige brauchbare Bilder für das Hautbild, Modell bleibt einfarbig.")
+        return None
+    if views is None:
+        log(f"Hautbild: {len(frames)} Bilder werden genau ausgerichtet …")
+        views = fit_views(model, params, cam.fit_frames(frames), log=log)
+    if folder is not None:
+        (Path(folder) / "ansichten.json").write_text(json.dumps(
+            [{"bild": a.obs.index, **v.to_json()} for a, v in zip(frames, views, strict=True)], indent=1), "utf-8")
+    sharp = np.array([a.quality.metrics.get("sharpness", 1.0) for a in frames])
+    weights = np.sqrt(sharp / max(sharp.max(), 1e-6))
+    by_index = {a.obs.index: i for i, a in enumerate(frames) if views[i].iou >= 0.7}
+    if not by_index:
+        log("Kein Bild passte gut genug für das Hautbild, Modell bleibt einfarbig.")
+        return None
+    uv = model.anny.texture_coordinates.detach().cpu().numpy()
+    face_uv = model.anny.face_texture_coordinate_indices.detach().cpu().numpy()
+
+    def shots():
+        if recording.is_video:
+            full = read_full_frames(recording.paths[0], set(by_index))
+        else:
+            full = ((i, rgb) for i, _, rgb in read_images(recording.paths, max_side=None) if i in by_index)
+        for index, rgb in full:
+            if index not in by_index:
+                continue
+            i = by_index[index]
+            view = views[i]
+            mask, _ = cam.warp(frames[i].obs.mask, None)
+            yield Shot(rgb=rgb, mask=mask, intr=cam.intr, to_image=cam.to_image(rgb.shape[1]),
+                       vertices=view_vertices(model, params, view), yaw=view.yaw, trans=view.trans,
+                       weight=float(weights[i]))
+
+    size = size or TEXTURE_SIZE
+    baker = TextureBaker(model, size)
+    for n, shot in enumerate(shots()):
+        baker.add(shot)
+        if n % 8 == 0:
+            log(f"Hautbild: Bild {n + 1}/{len(by_index)} übertragen")
+    skin = baker.finish()
+    if fine_align:
+        # Raster für den Vergleich: etwa 1920 Pixel lange Seite
+        k = 1920 / max(cam.intr.width, cam.intr.height)
+        cintr = cam.intr.scaled(k)
+        refined = TextureBaker(model, size, reference=skin)
+        shifts = []
+        for n, shot in enumerate(shots()):
+            to_cmp = np.diag([k, k, 1.0]) @ np.linalg.inv(shot.to_image)  # Originalbild -> Vergleichsraster
+            photo = cv2.warpPerspective(shot.rgb, to_cmp, (cintr.width, cintr.height), flags=cv2.INTER_AREA)
+            render, body = render_textured(shot.vertices, model.faces, uv, face_uv, skin, shot.yaw, shot.trans,
+                                           cintr, background=photo, with_mask=True)
+            flow = alignment_flow(render, photo, body)
+            shifts.append(float(np.median(np.linalg.norm(flow[body], axis=-1))) / k if body.any() else 0.0)
+            shot.flow, shot.flow_scale = flow, k
+            refined.add(shot)
+            if n % 8 == 0:
+                log(f"Hautbild fein ausgerichtet: Bild {n + 1}/{len(by_index)}")
+        log(f"Feinausrichtung: Bilder im Mittel um {np.median(shifts):.1f} Pixel nachgeschoben.")
+        baker, skin = refined, refined.finish()
+    log(f"Hautbild aus {baker.shots} Bildern, {baker.coverage() * 100:.0f} % der Haut direkt gesehen, "
+        "der Rest ist aus der Umgebung ergänzt.")
+    if folder is not None:
+        cv2.imwrite(str(Path(folder) / "haut.jpg"), cv2.cvtColor(skin, cv2.COLOR_RGB2BGR),
+                    [cv2.IMWRITE_JPEG_QUALITY, 94])
+    return skin
 
 
 def fit_sheet(results: list[FrameFitResult], height: int = 360, per_row: int = 6) -> np.ndarray | None:
@@ -252,7 +376,10 @@ def reexport(record: ScanRecord, presets: tuple[str, ...] = PRESETS, device: str
         for key, value in changes.items():
             params.phenotype[key] = float(value)
         suffix = "_" + "_".join(f"{k}{v:.2f}" for k, v in changes.items())
-    files, hints = _export(model, params, record.folder / f"export{suffix}", presets)
+    skin = None
+    if (record.folder / "haut.jpg").exists():
+        skin = cv2.cvtColor(cv2.imread(str(record.folder / "haut.jpg")), cv2.COLOR_BGR2RGB)
+    files, hints = _export(model, params, record.folder / f"export{suffix}", presets, skin)
     for h in hints:
         log(h)
     return files

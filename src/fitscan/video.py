@@ -56,7 +56,29 @@ def read_frames(path: Path, fps: float = 4.0) -> Iterator[tuple[int, float, np.n
         raise ValueError(f"Video enthält keine lesbaren Bilder: {Path(path).name}. {VIDEO_HINT}")
 
 
-def read_images(paths: list[Path]) -> Iterator[tuple[int, float, np.ndarray]]:
+def read_full_frames(path: Path, indices: set[int]) -> Iterator[tuple[int, np.ndarray]]:
+    """Ausgewählte Bilder eines Videos in voller Auflösung (für das Hautbild), der Reihe nach."""
+    cap = cv2.VideoCapture(str(path))
+    if not cap.isOpened():
+        cap.release()
+        raise ValueError(f"Video lässt sich nicht öffnen: {Path(path).name}. {VIDEO_HINT}")
+    last = max(indices, default=-1)
+    index = 0
+    try:
+        while index <= last:
+            if index in indices:
+                ok, bgr = cap.read()
+                if not ok:
+                    break
+                yield index, cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            elif not cap.grab():
+                break
+            index += 1
+    finally:
+        cap.release()
+
+
+def read_images(paths: list[Path], max_side: int | None = MAX_SIDE) -> Iterator[tuple[int, float, np.ndarray]]:
     for i, p in enumerate(paths):
         bgr = cv2.imread(str(p))
         if bgr is None:
@@ -64,7 +86,7 @@ def read_images(paths: list[Path]) -> Iterator[tuple[int, float, np.ndarray]]:
                 raise ValueError(f"Foto lässt sich nicht öffnen: {Path(p).name}. {HEIC_HINT}")
             raise ValueError(f"Foto lässt sich nicht öffnen: {Path(p).name}. Erwartet wird ein Foto als JPG oder PNG.")
         h, w = bgr.shape[:2]
-        factor = MAX_SIDE / max(h, w)
+        factor = max_side / max(h, w) if max_side else 1.0
         if factor < 1:
             bgr = cv2.resize(bgr, None, fx=factor, fy=factor, interpolation=cv2.INTER_AREA)
         yield i, float(i), cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
@@ -86,6 +108,15 @@ def analyze(
         if log and n % 10 == 0:
             log(f"Bild {n + 1} geprüft: {q.level}")
     return result, summarize([a.quality for a in result])
+
+
+def select_for_texture(frames: list[AnalyzedFrame], max_frames: int = 48) -> list[AnalyzedFrame]:
+    """Viele brauchbare Bilder rundherum fürs Hautbild, gleichmäßig über die Aufnahme verteilt."""
+    ok = [f for f in frames if f.quality.usable and f.obs.mask is not None and f.obs.keypoints is not None]
+    if len(ok) <= max_frames:
+        return ok
+    pick = np.linspace(0, len(ok) - 1, max_frames).round().astype(int)
+    return [ok[i] for i in dict.fromkeys(pick.tolist())]
 
 
 def select_for_fit(frames: list[AnalyzedFrame], per_sector: int = 1) -> list[AnalyzedFrame]:

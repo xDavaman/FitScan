@@ -5,7 +5,9 @@ Aufruf:
     blender -b -P src/fitscan/blender_glb_to_fbx.py -- koerper.glb koerper.blend
 
 Die FBX-Einstellungen sind auf Cascadeur und Spiele-Engines abgestimmt: Maßstab 1 an der
-Wurzel, keine zusätzlichen Endknochen, Y oben, Formregler als Blendshapes.
+Wurzel, keine zusätzlichen Endknochen, Y oben, Formregler als Blendshapes. Ein Hautbild wird in
+die FBX eingebettet bzw. in die .blend gepackt; die für GLB gedoppelten Punkte an UV-Nähten
+werden beim Import wieder zusammengeführt (geschlossenes Netz).
 Blender ist GPL; dieses Skript ruft Blender nur auf und wird nicht mit der App ausgeliefert.
 """
 
@@ -19,7 +21,7 @@ import bpy
 
 def convert(src: str, dst: str) -> dict:
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    bpy.ops.import_scene.gltf(filepath=src, bone_heuristic="TEMPERANCE")
+    bpy.ops.import_scene.gltf(filepath=src, bone_heuristic="TEMPERANCE", merge_vertices=True)
     objects = list(bpy.context.scene.objects)
     armatures = [o for o in objects if o.type == "ARMATURE"]
     meshes = [o for o in objects if o.type == "MESH"]
@@ -30,6 +32,8 @@ def convert(src: str, dst: str) -> dict:
         "vertices": sum(len(m.data.vertices) for m in meshes),
         "shape_keys": [k.name for m in meshes if m.data.shape_keys for k in m.data.shape_keys.key_blocks],
         "height_m": max((m.dimensions.z for m in meshes), default=0.0),
+        "textures": sorted(i.name for i in bpy.data.images if i.size[0] > 0),
+        "uv_layers": sum(len(m.data.uv_layers) for m in meshes),
     }
     if dst.lower().endswith(".fbx"):
         bpy.ops.export_scene.fbx(
@@ -45,8 +49,11 @@ def convert(src: str, dst: str) -> dict:
             axis_up="Y",
             primary_bone_axis="Y",
             secondary_bone_axis="X",
+            path_mode="COPY",
+            embed_textures=True,
         )
     elif dst.lower().endswith(".blend"):
+        bpy.ops.file.pack_all()
         bpy.ops.wm.save_as_mainfile(filepath=dst)
     else:
         raise SystemExit(f"Unbekanntes Zielformat: {dst}")

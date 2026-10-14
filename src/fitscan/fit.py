@@ -516,6 +516,120 @@ def fit_to_frames(
     return params, measure_params(model, params), results
 
 
+# --------------------------------------------------------------------------------------
+# Ansichten fürs Hautbild: Form steht fest, jedes Bild bekommt eigene Lage und Haltung
+# --------------------------------------------------------------------------------------
+
+# Beim Drehen auf der Stelle bewegen sich Beine und Arme ein wenig; diese Gelenke darf jedes Bild
+# eigens einstellen, damit Farben aus verschiedenen Bildern an derselben Hautstelle landen.
+VIEW_BONES = [*POSE_BONES, "lowerleg01.L", "lowerleg01.R", "root"]
+VIEW_POSE_REG = 0.02  # Abweichung eines Bildes von der gemeinsamen Haltung (gegen Ausreißer)
+
+
+@dataclasses.dataclass
+class View:
+    """So zeigt ein Bild den Körper: Drehung, Verschiebung und Haltung in diesem Moment."""
+
+    yaw: float  # Radiant
+    trans: np.ndarray  # (3,) Meter, Kamerakoordinaten
+    pose: np.ndarray  # (len(VIEW_BONES), 3) Achse mal Winkel
+    iou: float = 0.0
+
+    def to_json(self) -> dict:
+        return {"yaw": self.yaw, "trans": [float(x) for x in self.trans],
+                "pose": np.round(self.pose, 5).tolist(), "iou": self.iou}
+
+    @classmethod
+    def from_json(cls, data: dict) -> View:
+        return cls(float(data["yaw"]), np.array(data["trans"], np.float32),
+                   np.array(data["pose"], np.float32), float(data.get("iou", 0.0)))
+
+
+def view_pose_matrices(model: BodyModel, pose_aa: torch.Tensor) -> torch.Tensor:
+    """(B, len(VIEW_BONES), 3) -> (B, J, 4, 4) lokale Gelenkdrehungen."""
+    b = pose_aa.shape[0]
+    idx = torch.tensor([model.bone(n) for n in VIEW_BONES], device=pose_aa.device)
+    pose = torch.eye(4, device=pose_aa.device)[None, None].repeat(b, len(model.bone_labels), 1, 1)
+    return pose.index_put((torch.arange(b, device=pose_aa.device)[:, None], idx[None]),
+                          axis_angle_to_matrix(pose_aa))
+
+
+def _rest_tensors(model: BodyModel, params: BodyParams) -> dict[str, torch.Tensor]:
+    offsets = None
+    if params.offsets is not None:
+        offsets = torch.as_tensor(params.offsets, dtype=torch.float32, device=model.device)
+    return model.rest(model.phenotype_tensor(params), model.local_tensor(params), offsets, params.scale)
+
+
+@torch.no_grad()
+def view_vertices(model: BodyModel, params: BodyParams, view: View) -> np.ndarray:
+    """Körper (Anny-Koordinaten) in der Haltung dieses Bildes."""
+    rest = _rest_tensors(model, params)
+    pose = view_pose_matrices(model, torch.as_tensor(view.pose[None], dtype=torch.float32, device=model.device))
+    return model.posed(rest, pose, params.scale)["vertices"][0].cpu().numpy()
+
+
+def fit_views(model: BodyModel, params: BodyParams, frames: list[FitFrame],
+              steps: tuple[int, int] = (40, 80), chunk: int = 8, log: Log | None = None) -> list[View]:
+    """Drehung, Verschiebung und Haltung je Bild bei fester Körperform (für das Hautbild).
+
+    Zuerst eine gemeinsame Haltung für alle Bilder, dann darf jedes Bild davon etwas abweichen
+    (Schritte beim Drehen, Arme)."""
+    if not frames:
+        return []
+    device = model.device
+    with torch.no_grad():
+        rest = _rest_tensors(model, params)
+        start = model.posed(rest, None, params.scale)
+        verts0, heads0 = start["vertices"][0], start["bone_heads"][0]
+    preps = [_prepare_frame(f, device) for f in frames]
+    k = len(preps)
+    yaw_init, trans_init = [], []
+    for i, (prep, frame) in enumerate(zip(preps, frames, strict=True)):
+        y, t = _initial_view(verts0, heads0, prep, model, frame.yaw_init, refine_steps=15)
+        yaw_init.append(y)
+        trans_init.append(t)
+        if log and (i % 10 == 0 or i == k - 1):
+            log(f"Ansicht {i + 1}/{k} grob ausgerichtet")
+    yaws = torch.nn.Parameter(torch.tensor(yaw_init, dtype=torch.float32, device=device))
+    trans = torch.nn.Parameter(torch.tensor(trans_init, dtype=torch.float32, device=device))
+    shared = torch.nn.Parameter(torch.zeros(len(VIEW_BONES), 3, device=device))
+    delta = torch.nn.Parameter(torch.zeros(k, len(VIEW_BONES), 3, device=device))
+
+    def stage(name: str, n_steps: int, params_: list, kp_w: float) -> None:
+        opt = torch.optim.Adam(params_, lr=0.01)
+        for step in range(n_steps):
+            opt.zero_grad()
+            total = 0.0
+            for lo in range(0, k, chunk):
+                ids = list(range(lo, min(k, lo + chunk)))
+                pose = view_pose_matrices(model, shared[None] + delta[ids])
+                posed = model.posed(rest, pose, params.scale)
+                loss = sum(_frame_loss(posed["vertices"][b], posed["bone_heads"][b], yaws[i], trans[i],
+                                       preps[i], model, kp_w) for b, i in enumerate(ids))
+                loss = SILHOUETTE_WEIGHT * loss / k + VIEW_POSE_REG * (delta[ids] ** 2).sum() / k
+                loss.backward()
+                total += loss.item()
+            (0.01 * (shared ** 2).sum()).backward()
+            opt.step()
+            if log and step % 40 == 0:
+                log(f"{name}: Schritt {step}/{n_steps}, Fehler {total:.5f}")
+
+    stage("Ansichten, gemeinsame Haltung", steps[0], [yaws, trans, shared], 1.0)
+    stage("Ansichten, Haltung je Bild", steps[1], [yaws, trans, shared, delta], KEYPOINT_WEIGHT_SHAPE)
+
+    views = []
+    with torch.no_grad():
+        poses = (shared[None] + delta).cpu().numpy()
+        for i, prep in enumerate(preps):
+            view = View(float(yaws[i]), trans[i].cpu().numpy().astype(np.float32), poses[i].astype(np.float32))
+            verts = view_vertices(model, params, view)
+            rendered = render_mask(verts, model.faces, view.yaw, view.trans, prep["intr"]) > 0
+            view.iou = float((rendered & prep["mask"]).sum() / max((rendered | prep["mask"]).sum(), 1))
+            views.append(view)
+    return views
+
+
 def _soft_gate(model: BodyModel, edges: np.ndarray, rings: int = 8) -> np.ndarray:
     """1 = Feinform erlaubt, 0 = gesperrt (Kopf, Hände, Füße); dazwischen ein weicher Übergang."""
     gate = (~model.dominant_bone_mask(lambda n: n.startswith(NO_OFFSET_BONES))).astype(np.float32)
