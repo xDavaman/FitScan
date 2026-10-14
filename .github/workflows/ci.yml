@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Systembibliotheken für MediaPipe
+        run: sudo apt-get update -q && sudo apt-get install -y -q libegl1 libgles2 libgl1
+
+      - name: Umgebung (PyTorch nur für CPU)
+        run: |
+          uv venv -p 3.12 .venv
+          uv pip install -p .venv/bin/python torch --index-url https://download.pytorch.org/whl/cpu
+          uv pip install -p .venv/bin/python -e ".[prototyp,dev]"
+
+      - name: Anny-Zwischenspeicher
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/anny
+          key: anny-${{ hashFiles('pyproject.toml') }}
+
+      - name: Codeprüfung (ruff)
+        run: .venv/bin/ruff check src tests scripts
+
+      - name: Lizenzprüfung
+        run: .venv/bin/python scripts/check_licenses.py
+
+      - name: Tests
+        run: .venv/bin/python -m pytest -q
+
+      - name: glTF-Prüfung (Khronos-Validator)
+        env:
+          FITSCAN_HOME: ${{ runner.temp }}/fitscan
+        run: |
+          .venv/bin/python -m fitscan koerper --name CI --groesse 180 --gewicht 80
+          npm install --no-save --silent gltf-validator@2.0.0-dev.3.10
+          node scripts/validate_gltf.mjs "$FITSCAN_HOME"/personen/ci/scans/*/*.glb
