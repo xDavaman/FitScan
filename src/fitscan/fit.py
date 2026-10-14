@@ -653,6 +653,8 @@ def _vertex_normals(verts: torch.Tensor, faces: torch.Tensor) -> torch.Tensor:
 def repair_offsets(model: BodyModel, params: BodyParams, rounds: int = 12) -> tuple[BodyParams, int]:
     """Nimmt die Feinform dort zurück, wo sie Dreiecke umklappt oder Flächen ineinander schiebt.
     Gibt die Zahl der betroffenen Punkte zurück."""
+    import trimesh
+
     from .mesh_check import self_intersections
 
     if params.offsets is None:
@@ -666,7 +668,16 @@ def repair_offsets(model: BodyModel, params: BodyParams, rounds: int = 12) -> tu
         return np.cross(v[faces[:, 1]] - v[faces[:, 0]], v[faces[:, 2]] - v[faces[:, 0]])
 
     ref = fnormals(template)
-    base = self_intersections(template, faces)
+    # Augäpfel und Mundraum sind eigene Teile und stecken bei Anny bewusst in Lidern und Lippen
+    # (wie in mesh_check): nur Überschneidungen des Körpers selbst zählen
+    mesh = trimesh.Trimesh(template, faces, process=False)
+    labels = trimesh.graph.connected_component_labels(mesh.face_adjacency, node_count=len(faces))
+    main = labels == np.bincount(labels).argmax()
+
+    def crossings(v):
+        return {(a, b) for a, b in self_intersections(v, faces) if main[a] and main[b]}
+
+    base = crossings(template)
     offsets = params.offsets.astype(np.float32).copy()
     touched: set[int] = set()
     for i in range(rounds):
@@ -674,7 +685,7 @@ def repair_offsets(model: BodyModel, params: BodyParams, rounds: int = 12) -> tu
         trial.offsets = offsets
         verts = model.rest_numpy(trial)["vertices"]
         bad_faces = set(np.flatnonzero((fnormals(verts) * ref).sum(1) < 0).tolist())
-        for a, b in self_intersections(verts, faces) - base:
+        for a, b in crossings(verts) - base:
             bad_faces.update((a, b))
         if not bad_faces:
             break

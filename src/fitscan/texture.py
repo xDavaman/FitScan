@@ -131,11 +131,15 @@ def _hit(cam: np.ndarray, faces: np.ndarray, intr: Intrinsics, ids: np.ndarray):
 
 def render_textured(vertices: np.ndarray, faces: np.ndarray, uv: np.ndarray, face_uv: np.ndarray,
                     skin: np.ndarray, yaw: float, trans: np.ndarray, intr: Intrinsics,
-                    background: np.ndarray | None = None, with_mask: bool = False):
+                    background: np.ndarray | None = None, with_mask: bool = False,
+                    camera: np.ndarray | None = None):
     """Modell mit Hautbild aus Sicht einer Kamera (ohne zusätzliches Licht: die Helligkeit steckt
-    schon im Hautbild). Zum Vergleich mit dem Videobild."""
-    cam = to_camera(torch.as_tensor(vertices, dtype=torch.float32), torch.tensor([float(yaw)]),
-                    torch.as_tensor(trans, dtype=torch.float32)[None])[0].numpy().astype(np.float64)
+    schon im Hautbild). Zum Vergleich mit dem Videobild. camera: Punkte schon in Kamerakoordinaten."""
+    if camera is not None:
+        cam = np.asarray(camera, np.float64)
+    else:
+        cam = to_camera(torch.as_tensor(vertices, dtype=torch.float32), torch.tensor([float(yaw)]),
+                        torch.as_tensor(trans, dtype=torch.float32)[None])[0].numpy().astype(np.float64)
     ids = face_buffer(cam, faces, intr)
     out = (np.full((intr.height, intr.width, 3), 235, np.uint8) if background is None
            else background.copy())
@@ -212,6 +216,57 @@ def _sample(img: np.ndarray, x: np.ndarray, y: np.ndarray, interp=cv2.INTER_LINE
     return out.reshape(rows * width, *img.shape[2:])[:n]
 
 
+# ------------------------------------------------------------------------- Weißabgleich
+
+WHITE_LIMIT = 1.35  # stärkere Korrektur je Kanal wäre eher eine farbige Wand als ein Farbstich
+WHITE_MIN_SHARE = 0.02  # so viel heller, farbloser Hintergrund muss im Bild sein
+
+
+def to_linear(img: np.ndarray) -> np.ndarray:
+    c = np.asarray(img, np.float32) / 255.0
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+
+def to_srgb(lin: np.ndarray) -> np.ndarray:
+    lin = np.clip(lin, 0, 1)
+    c = np.where(lin <= 0.0031308, lin * 12.92, 1.055 * lin ** (1 / 2.4) - 0.055)
+    return np.clip(c * 255 + 0.5, 0, 255).astype(np.uint8)
+
+
+def white_samples(rgb: np.ndarray, person: np.ndarray | None = None, side: int = 480) -> np.ndarray:
+    """Helle, fast farblose, nicht überstrahlte Stellen (weiße Wand, Decke, Türen) als lineare
+    Farbe je Stelle, Grün = 1. person: Maske im selben Bild, diese Stellen zählen nicht."""
+    k = side / max(rgb.shape[:2])
+    small = cv2.resize(rgb, None, fx=k, fy=k, interpolation=cv2.INTER_AREA).astype(np.float32)
+    mx, mn = small.max(-1), small.min(-1)
+    ok = (mx < 248) & (mn > 120) & ((mx - mn) / np.maximum(mx, 1) < 0.25)
+    if person is not None:
+        p = cv2.resize(person.astype(np.uint8), small.shape[1::-1], interpolation=cv2.INTER_NEAREST)
+        ok &= cv2.dilate(p, np.ones((9, 9), np.uint8)) == 0
+    if ok.mean() < WHITE_MIN_SHARE:
+        return np.zeros((0, 3), np.float32)
+    lin = to_linear(small[ok])
+    return lin / np.maximum(lin[:, 1:2], 1e-6)
+
+
+def white_point(samples: list[np.ndarray]) -> np.ndarray | None:
+    """Farbe von Weiß in diesen Aufnahmen (linear, Grün = 1) oder None, wenn unsicher."""
+    s = [x for x in samples if len(x)]
+    if len(s) < max(1, len(samples) // 3):
+        return None
+    white = np.median(np.concatenate(s), axis=0)
+    if (white > WHITE_LIMIT).any() or (white < 1 / WHITE_LIMIT).any():
+        return None
+    return white.astype(np.float32)
+
+
+def neutralize(img: np.ndarray, white: np.ndarray | None) -> np.ndarray:
+    """Farbstich entfernen: was in der Aufnahme die Farbe white hatte, wird neutral grau."""
+    if white is None:
+        return img
+    return to_srgb(to_linear(img) / np.asarray(white, np.float32))
+
+
 # ------------------------------------------------------------------------- Hautbild
 
 
@@ -229,6 +284,14 @@ class Shot:
     weight: float = 1.0  # z. B. Schärfe des Bildes
     flow: np.ndarray | None = None  # Feinausrichtung (H, W, 2) auf dem Raster intr.scaled(flow_scale)
     flow_scale: float = 1.0
+    camera: np.ndarray | None = None  # (V, 3) Körper direkt in Kamerakoordinaten (statt vertices/yaw/trans)
+    region: np.ndarray | None = None  # (V,) 0..1: nur dieser Teil zählt (z. B. Kopf aus einer Kopfaufnahme)
+
+    def camera_points(self) -> np.ndarray:
+        if self.camera is not None:
+            return np.asarray(self.camera, np.float64)
+        return to_camera(torch.as_tensor(self.vertices, dtype=torch.float32), torch.tensor([float(self.yaw)]),
+                         torch.as_tensor(self.trans, dtype=torch.float32)[None])[0].numpy().astype(np.float64)
 
 
 @dataclasses.dataclass
@@ -246,13 +309,17 @@ class Observation:
 def observe(model: BodyModel, m: UVMap, shot: Shot) -> Observation | None:
     """Welche Texel zeigt dieses Bild wie gut (frontal, unverdeckt, nicht am Rand)?"""
     faces = model.faces
-    cam = to_camera(torch.as_tensor(shot.vertices, dtype=torch.float32), torch.tensor([float(shot.yaw)]),
-                    torch.as_tensor(shot.trans, dtype=torch.float32)[None])[0].numpy().astype(np.float64)
+    cam = shot.camera_points()
     normals = _vertex_normals(cam, faces)
-    # Nur Dreiecke, die zur Kamera zeigen
+    # Nur Dreiecke, die zur Kamera zeigen (und zum gewünschten Teil gehören)
     tri = cam[faces]
     fn = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
     facing = (fn * tri.mean(1)).sum(1) < 0
+    used = faces
+    if shot.region is not None:
+        part = shot.region[faces].max(1) > 0
+        facing &= part
+        used = faces[part]
     sel = np.flatnonzero(facing[m.face])
     f, bary = m.face[sel], m.bary[sel].astype(np.float64)
     corners = faces[f]
@@ -266,7 +333,7 @@ def observe(model: BodyModel, m: UVMap, shot: Shot) -> Observation | None:
 
     # Verdeckung über einen Tiefenpuffer in höherer Auflösung
     dintr = intr.scaled(DEPTH_SCALE)
-    depth = depth_buffer(cam, faces, dintr)
+    depth = depth_buffer(cam, used, dintr)
     du, dv = u * DEPTH_SCALE, v * DEPTH_SCALE
     front = _sample(depth, du, dv, cv2.INTER_NEAREST)
     visible = (p[:, 2] <= front + VISIBLE_TOLERANCE) & (cos > MIN_COS)
@@ -281,6 +348,8 @@ def observe(model: BodyModel, m: UVMap, shot: Shot) -> Observation | None:
     inside_px = _sample(inside, u, v, cv2.INTER_LINEAR)
     closeness = np.clip(np.minimum(edge, inside_px) / ramp, 0, 1)
     w = shot.weight * visible * closeness ** 2 * np.clip((cos - MIN_COS) / (1 - MIN_COS), 0, 1) ** 2
+    if shot.region is not None:
+        w = w * (shot.region[corners] * bary).sum(1)
     keep = w > 1e-4
     if not keep.any():
         return None

@@ -110,3 +110,40 @@ def test_scan_texture_end_to_end(tmp_path, model):
     got = out.reshape(-1, 3)[m.texel[torso]].astype(np.float32)
     want = skin.reshape(-1, 3)[m.texel[torso]].astype(np.float32)
     assert np.median(np.abs(got - want).mean(1)) < 15
+
+
+def test_white_balance_removes_cast():
+    from fitscan.texture import neutralize, white_point, white_samples
+
+    rng = np.random.default_rng(0)
+    wall = np.array([238, 222, 196], np.float32)  # weiße Wand unter warmem Licht
+    img = np.clip(wall * rng.uniform(0.75, 1.0, (240, 320, 1)), 0, 255).astype(np.uint8)
+    person = np.zeros((240, 320), bool)
+    person[60:200, 120:200] = True
+    img[person] = (200, 140, 110)  # Haut zählt nicht
+    white = white_point([white_samples(img, person)])
+    assert white is not None and white[0] > 1.05 and white[2] < 0.9
+    fixed = neutralize(img, white).astype(int)
+    assert np.abs(fixed[10, 10] - fixed[10, 10].mean()).max() <= 3
+    # kein heller Hintergrund: keine Korrektur
+    assert white_point([white_samples(np.full((100, 100, 3), 40, np.uint8))]) is None
+
+
+def test_bake_region_limits_to_part(model, known_skin):
+    """Mit region trägt ein Bild nur zu diesem Teil des Körpers bei (z. B. Kopf aus der Kopfaufnahme)."""
+    verts = model.rest_numpy(BodyParams())["vertices"]
+    uv = model.anny.texture_coordinates.numpy()
+    face_uv = model.anny.face_texture_coordinate_indices.numpy()
+    intr = Intrinsics.phone_default(540, 960)
+    trans = np.array([0.0, 0.85, 3.0])
+    region = model.dominant_bone_mask(lambda n: n == "head").astype(np.float64)
+    baker = TextureBaker(model, SIZE)
+    rgb = render_textured(verts, model.faces, uv, face_uv, known_skin, 0.0, trans, intr)
+    cam = to_camera(torch.as_tensor(verts), torch.tensor([0.0]), torch.as_tensor(trans, dtype=torch.float32)[None])
+    cam = cam[0].numpy().astype(np.float64)
+    baker.add(Shot(rgb=rgb, mask=np.ones((intr.height, intr.width), np.float32), intr=intr, to_image=np.eye(3),
+                   vertices=verts, yaw=0.0, trans=trans, camera=cam, region=region))
+    m = baker.map
+    on_head = region[model.faces[m.face]].min(1) > 0
+    assert baker.base_w[on_head].max() > SEEN_FULL
+    assert baker.base_w[region[model.faces[m.face]].max(1) == 0].max() == 0

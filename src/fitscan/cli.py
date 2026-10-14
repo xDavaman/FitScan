@@ -86,7 +86,13 @@ def main(argv: list[str] | None = None) -> None:
                         help="Personenmaske nachschärfen (nur bei unruhigem Hintergrund sinnvoll)")
     p_scan.add_argument("--ohne-hautbild", action="store_true",
                         help="kein Hautbild (Textur) aus dem Video, Modell einfarbig (schneller)")
+    p_scan.add_argument("--kopfvideo", type=Path,
+                        help="Nahaufnahme des Kopfes (Kopf langsam drehen): Gesicht, Ohren, Augen genauer")
     _add_person_args(p_scan)
+
+    p_head = sub.add_parser("kopf", aliases=["head"], help="Kopfvideo zum letzten Scan einer Person hinzunehmen")
+    p_head.add_argument("video", type=Path, help="Nahaufnahme des Kopfes, Kopf langsam in alle Richtungen drehen")
+    p_head.add_argument("--name", default="Ich", help="Person, deren letzter Scan ergänzt wird")
 
     p_body = sub.add_parser("koerper", aliases=["body"], help="Körper nur aus Maßen")
     _add_person_args(p_body)
@@ -137,7 +143,18 @@ def main(argv: list[str] | None = None) -> None:
         person = _person(args)
         source = args.quelle[0] if len(args.quelle) == 1 else list(args.quelle)
         _print_result(scan(source, person, args.name, device=args.geraet, fps=args.fps,
-                           refine=args.kanten_nachschaerfen, texture=not args.ohne_hautbild, log=print))
+                           refine=args.kanten_nachschaerfen, texture=not args.ohne_hautbild,
+                           head_video=args.kopfvideo, log=print))
+    elif cmd in ("kopf", "head"):
+        from .pipeline import add_head
+        from .store import Store
+
+        store = Store()
+        person = store.find(args.name)
+        latest = store.latest(person.id) if person else None
+        if latest is None:
+            raise SystemExit(f"Für „{args.name}“ gibt es noch keinen Scan. Erst „fitscan scan …“ ausführen.")
+        _print_result(add_head(latest, args.video, store, device=args.geraet, log=print))
     elif cmd in ("koerper", "body"):
         from .pipeline import body_from_measurements
 

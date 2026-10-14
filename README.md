@@ -25,6 +25,8 @@ start_windows.bat live                    :: Webcam-Assistent mit Ampel, Leertas
 start_windows.bat pruefen video.mp4       :: nur die Aufnahme bewerten
 start_windows.bat scan video.mp4 --name Sean --geschlecht m --alter 30 --groesse 182 --gewicht 84
 start_windows.bat scan video.mp4 --name Sean --groesse 182 --gewicht 84 --kanten-nachschaerfen   :: unruhiger Hintergrund
+start_windows.bat scan video.mp4 --kopfvideo kopf.mp4 --name Sean --groesse 182 --gewicht 84   :: mit Kopfaufnahme
+start_windows.bat kopf kopf.mp4 --name Sean   :: Kopfaufnahme zum letzten Scan hinzunehmen
 start_windows.bat koerper --name Sean --groesse 182 --gewicht 84 --taille 86
 start_windows.bat selbsttest
 start_windows.bat info                    :: Grafikkarte, Versionen, Blender gefunden?
@@ -38,6 +40,11 @@ start_windows.bat info                    :: Grafikkarte, Versionen, Blender gef
 - Etwa 2 m Abstand, Handy hochkant auf Hüfthöhe (Stativ), ganzer Körper mit Rand im Bild
 - A-Pose: Arme gestreckt, etwa 30° vom Körper, Füße schulterbreit
 - Einmal langsam auf der Stelle drehen (etwa 20 Sekunden)
+
+**Kopfaufnahme (optional, für Gesicht, Ohren und Augen):** Handy hochkant etwa 40 cm vor dem
+Gesicht, Kopf langsam nach links und rechts (bis die Ohren zu sehen sind), nach oben und unten
+drehen, neutral schauen, Mund geschlossen, etwa 30 Sekunden. Heller, ruhiger Hintergrund hilft beim
+Freistellen des Kopfumrisses.
 
 Körpergröße und Gewicht sind Pflicht. Mit dem Maßband gemessene Umfänge (Brust, Taille, Hüfte …)
 machen das Modell genauer. Der Webcam-Assistent (`live`) zeigt mit einer Ampel, ob Licht, Abstand,
@@ -54,6 +61,7 @@ Jeder Scan landet in `daten/personen/<name>/scans/<datum>/`:
 | `koerper.obj` | nur das Netz (z. B. für 3D-Druck oder Bildhauerprogramme), mit `.mtl` und Hautbild |
 | `haut.jpg` | Hautbild aus dem Video (Hautton, Tattoos, Muttermale, Kleidung) auf Annys UV-Karte, 4096 × 4096 |
 | `ansichten.json` | Lage und Haltung des Körpers in jedem verwendeten Videobild |
+| `kopf.json`, `kopfvergleich.jpg` | nur mit Kopfaufnahme: Gesichtsmaße, Passgenauigkeit, Foto und Modell nebeneinander |
 | `params.json`, `offsets.npy` | Körperparameter; daraus wird jeder Re-Scan weitergerechnet |
 | `scan.json`, `bilder.json` | Maße, Eingaben, Qualitätsbericht, Passgenauigkeit je Bild |
 
@@ -65,8 +73,18 @@ Beinen), dann werden die Farben auf die Körperoberfläche übertragen. Ein zwei
 jedes Bild per optischem Fluss nach, damit Tattoos und Schrift aus allen Bildern genau
 übereinanderliegen. Feinheiten kommen aus den schärfsten, frontalsten Bildern, die Grundfarbe aus
 vielen. Nie gesehene Stellen (Fußsohlen, Achseln) werden aus der Umgebung aufgefüllt. Das Licht der
-Aufnahme steckt im Hautbild; das Gesicht passt erst mit eigener Kopfaufnahme genau. Ohne Hautbild
-(schneller): Häkchen in der Oberfläche entfernen oder `--ohne-hautbild`.
+Aufnahme steckt im Hautbild; ein Farbstich des Lichts wird an hellen, farblosen Flächen im Hintergrund
+(weiße Wand) gemessen und herausgerechnet. Ohne Hautbild (schneller): Häkchen in der Oberfläche
+entfernen oder `--ohne-hautbild`.
+
+**Kopf:** Mit Kopfaufnahme sucht MediaPipe Face Landmarker (Apache 2.0) in jedem Bild 478
+Gesichtspunkte. Ein Bündelausgleich über alle Bilder ergibt daraus die Gesichtsform und die Kopflage
+je Bild. Annys Kopf wird glatt so verformt, dass ihr Gesicht auf diese Form passt; danach werden
+Schädel und Ohren an den Kopfumriss in allen Bildern angepasst (GrabCut-Freistellung). Das Hautbild
+von Gesicht, Kopfhaut und Ohren kommt scharf aus der Kopfaufnahme, die Augen werden mit der
+gemessenen Irisfarbe neu gezeichnet. Skelett, Netz und UV-Karte bleiben gleich; das Modell bleibt
+riggbar und geschlossen. Mimik (offener Mund, Lächeln) wird übergangen; Haare sind (noch) nur Farbe
+auf der Kopfhaut.
 
 - **Blender:** Datei → Importieren → glTF 2.0 → `koerper.glb`.
 - **Cascadeur:** `koerper_unreal.glb` importieren (oder FBX, siehe unten), dann Quick Rigging.
@@ -88,7 +106,8 @@ als Eingabe gleicht das aus. Die Abnahme mit echten Handyvideos steht noch aus.
 ## Lizenzen
 
 FitScan nutzt nur frei und kommerziell nutzbare Bausteine: Anny (Apache 2.0, Daten CC0),
-PyTorch (BSD), MediaPipe (Apache 2.0), OpenCV (Apache 2.0), Gradio (Apache 2.0), trimesh (MIT).
+PyTorch (BSD), MediaPipe mit Pose- und Face-Landmarker-Modell (Apache 2.0), OpenCV (Apache 2.0),
+Gradio (Apache 2.0), trimesh (MIT), SciPy (BSD).
 Kein SMPL. Blender wird nur als eigenständiges Programm aufgerufen. Die Modelle, die du mit
 FitScan erzeugst, gehören dir und können in andere Projekte übernommen werden.
 Prüfung: `python scripts/check_licenses.py`.

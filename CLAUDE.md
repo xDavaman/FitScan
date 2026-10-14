@@ -30,6 +30,7 @@ Technischer Plan: https://claude.ai/code/artifact/e834733a-d72b-4a65-bdea-881002
 | `segment.py` | optionale Kantennachschärfung der Maske mit GrabCut (Standard aus, hilft nur bei unruhigem Hintergrund) |
 | `quality.py` | Scan-Assistent: Licht, Schärfe, Abstand, Position, A-Pose, Stillhalten, Blickwinkel |
 | `video.py` | Video/Fotos einlesen, prüfen, bestes Bild pro Blickwinkel wählen |
+| `head.py` | Kopfaufnahme: Gesichtspunkte (MediaPipe Face Landmarker), Bündelausgleich, Kopf verformen (Gesicht, Schädel, Ohren), Kopf-Hautbild, Augen zeichnen |
 | `texture.py` | Hautbild: UV-Karte, Sichtbarkeit je Bild, Farben in zwei Lagen mischen, Lücken füllen, Feinausrichtung per optischem Fluss, Vorschau-Rendering |
 | `mesh_check.py` | wasserdicht, Orientierung, kaputte oder umgeklappte Dreiecke |
 | `export.py` | eigener GLB-Exporter (Skelett, Gewichte, Formregler), OBJ, Cascadeur-Prüfung, Namensschemata |
@@ -67,6 +68,11 @@ uv pip install -p .venv/bin/python -e ".[prototyp,dev]"
 - Hautbild: `fit.fit_views` richtet jedes Bild bei fester Form aus (eigene Haltung je Bild),
   `pipeline.bake_skin` überträgt die Farben. GLB braucht dafür doppelte Punkte an UV-Nähten
   (`RiggedMesh.split_at_seams`), Blender führt sie beim Import wieder zusammen (`merge_vertices`).
+- Kopf: `pipeline.head_stage` (in `scan(head_video=…)` und `add_head`). Gesichtspunkt → Stelle auf
+  Annys Netz: `data/face_landmarks_anny.json`, neu mit `scripts/calibrate_face.py`. Annys Augäpfel und
+  Mundraum stecken bewusst in Lidern und Lippen; `repair_offsets` und `mesh_check` zählen nur
+  Überschneidungen des Körpers selbst. Flächen, die sich berühren, ohne verbunden zu sein (Lippen,
+  Lider), werden beim Verformen gekoppelt (`head._contact_pairs`).
 - iPhone-Videos sind HDR (HLG). OpenCV liest sie ohne Tonemapping; die Farben sehen dabei
   natürlich aus, ffmpeg-Tonemapping wirkte flauer.
 - Körperpunkt-Versatz MediaPipe → Anny-Gelenke: `src/fitscan/data/keypoint_offsets.json`,

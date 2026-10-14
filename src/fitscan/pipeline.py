@@ -148,10 +148,14 @@ def body_from_measurements(person: Person, name: str, store: Store | None = None
 
 def scan(source: Path | list[Path], person: Person, name: str, store: Store | None = None,
          presets: tuple[str, ...] = PRESETS, device: str | None = None, fps: float = 4.0,
-         refine: bool = False, texture: bool = True, log: Log | None = None) -> ScanResult:
+         refine: bool = False, texture: bool = True, head_video: Path | None = None,
+         log: Log | None = None) -> ScanResult:
     """Video oder Fotos -> angepasster, riggbarer Körper als GLB/OBJ, gespeichert beim Namen.
 
     texture: Hautbild (Farben, Tattoos, Muttermale) aus den Bildern aufs Modell übertragen.
+
+    head_video: zusätzliche Nahaufnahme des Kopfes (Kopf langsam in alle Richtungen drehen). Daraus
+    kommen Gesichtsform, Schädel, Ohren und das scharfe Hautbild von Gesicht und Augen.
 
     refine: Maskenkanten mit GrabCut nachschärfen. Hilft bei unruhigem Hintergrund, schadet bei
     ruhigem Hintergrund leicht (Testvideo: Brust 2,5 statt 3,2 cm Abweichung ohne Nachschärfen).
@@ -164,7 +168,7 @@ def scan(source: Path | list[Path], person: Person, name: str, store: Store | No
         raise ValueError(" ".join(problems))
     store = store or Store()
     paths = [Path(p) for p in (source if isinstance(source, list) else [source])]
-    for p in paths:
+    for p in paths + ([Path(head_video)] if head_video else []):
         if not p.exists():
             raise FileNotFoundError(f"Datei nicht gefunden: {p}")
     recording = best_recording(check_recordings(paths, fps, log), log)
@@ -198,14 +202,17 @@ def scan(source: Path | list[Path], person: Person, name: str, store: Store | No
     skin = None
     if texture:
         skin = bake_skin(model, params, recording, cam, folder, log=log)
-    files, hints = _export(model, params, folder, presets, skin)
     quality = {
         "bericht": report.to_json(),
         "bilder": [r.to_json() for r in frame_results],
         "quelle": [str(p) for p in paths],
     }
+    if head_video:
+        params, skin, quality["kopf"] = head_stage(model, params, Path(head_video), skin, folder,
+                                                   texture=texture, log=log)
+    files, hints = _export(model, params, folder, presets, skin)
     record = store.save_scan(rec.id, folder, params, person.measures, measures, quality,
-                             "video" if is_video else "bilder", files)
+                             ("video" if is_video else "bilder") + ("+kopf" if head_video else ""), files)
     (folder / "bilder.json").write_text(json.dumps(quality["bilder"], indent=2), "utf-8")
     sheet = fit_sheet(frame_results)
     if sheet is not None:
@@ -262,16 +269,26 @@ def level_camera(frames: list, masks: list[np.ndarray], log: Log | None = None) 
 
 def bake_skin(model: BodyModel, params: BodyParams, recording: Recording, cam: LevelCamera,
               folder: Path | None = None, max_frames: int = 48, size: int | None = None,
-              views: list | None = None, fine_align: bool = True,
+              views: list | None = None, fine_align: bool = True, white_balance: bool = True,
               log: Log | None = None) -> np.ndarray | None:
     """Hautbild aus den Bildern einer Aufnahme. Speichert haut.jpg und ansichten.json im Ordner.
 
     Erst werden die Bilder über Silhouette und Körperpunkte ausgerichtet (Lage und Haltung je
     Bild). fine_align: danach ein zweiter Durchgang, in dem das vorläufige Hautbild in jedes
     Videobild gerendert und per optischem Fluss nachgeschoben wird, damit Tattoos, Schrift und
-    Kanten aus allen Bildern genau übereinander liegen."""
+    Kanten aus allen Bildern genau übereinander liegen. white_balance: Farbstich des Lichts an
+    hellen, farblosen Flächen im Hintergrund (weiße Wand) messen und herausrechnen."""
     from .fit import fit_views, view_vertices
-    from .texture import TEXTURE_SIZE, Shot, TextureBaker, alignment_flow, render_textured
+    from .texture import (
+        TEXTURE_SIZE,
+        Shot,
+        TextureBaker,
+        alignment_flow,
+        neutralize,
+        render_textured,
+        white_point,
+        white_samples,
+    )
     from .video import read_full_frames, read_images, select_for_texture
 
     log = log or _noop
@@ -311,8 +328,13 @@ def bake_skin(model: BodyModel, params: BodyParams, recording: Recording, cam: L
 
     size = size or TEXTURE_SIZE
     baker = TextureBaker(model, size)
+    whites = []
     for n, shot in enumerate(shots()):
         baker.add(shot)
+        if white_balance:
+            person = cv2.warpPerspective((shot.mask > 0.5).astype(np.uint8), shot.to_image,
+                                         shot.rgb.shape[1::-1], flags=cv2.INTER_NEAREST)
+            whites.append(white_samples(shot.rgb, person))
         if n % 8 == 0:
             log(f"Hautbild: Bild {n + 1}/{len(by_index)} übertragen")
     skin = baker.finish()
@@ -337,7 +359,14 @@ def bake_skin(model: BodyModel, params: BodyParams, recording: Recording, cam: L
         baker, skin = refined, refined.finish()
     log(f"Hautbild aus {baker.shots} Bildern, {baker.coverage() * 100:.0f} % der Haut direkt gesehen, "
         "der Rest ist aus der Umgebung ergänzt.")
+    white = white_point(whites) if white_balance else None
+    if white is not None:
+        skin = neutralize(skin, white)
+        log("Weißabgleich an hellen Flächen im Hintergrund (Licht hatte Rot/Grün/Blau "
+            + "/".join(f"{w:.2f}" for w in white) + ").")
     if folder is not None:
+        (Path(folder) / "weiss.json").write_text(json.dumps(
+            {"weisspunkt": None if white is None else [round(float(w), 4) for w in white]}), "utf-8")
         cv2.imwrite(str(Path(folder) / "haut.jpg"), cv2.cvtColor(skin, cv2.COLOR_RGB2BGR),
                     [cv2.IMWRITE_JPEG_QUALITY, 94])
     return skin
@@ -365,6 +394,100 @@ def fit_sheet(results: list[FrameFitResult], height: int = 360, per_row: int = 6
     return np.vstack(rows)
 
 
+# ------------------------------------------------------------------------- Kopf
+
+
+def head_stage(model: BodyModel, params: BodyParams, video: Path, body_skin: np.ndarray | None,
+               folder: Path | None = None, body_white: np.ndarray | None = None, texture: bool = True,
+               size: int | None = None, log: Log | None = None) -> tuple[BodyParams, np.ndarray | None, dict]:
+    """Kopf aus einer Kopfaufnahme: Gesichtsform, Schädel und Ohren als Feinform, Gesicht und Augen
+    als Hautbild (eingesetzt ins Körper-Hautbild). Speichert kopf.json, kopfvergleich.jpg, haut.jpg."""
+    from . import head as H
+    from .fit import repair_offsets
+
+    log = log or _noop
+    log("Kopfvideo: Gesichtspunkte werden in jedem Bild gesucht …")
+    tracks, intr = H.track_video(video, log=log)
+    verts = model.rest_numpy(params)["vertices"].astype(np.float64)
+    tri, bary = H.load_correspondence()
+    sol = H.solve_face(tracks, intr, H.surface_points(verts, model.faces, tri, bary), log=log)
+    log(f"Gesichtsform aus {len(tracks)} Bildern, mittlere Abweichung {sol.error_px:.1f} Pixel.")
+    place = H.place_head(model, verts, sol)
+    first = H.fit_head_shape(model, verts, sol, place, log=log)
+    log("Kopfumriss wird in jedem Bild freigestellt …")
+    masks = H.head_masks(video, sol, place, model, verts + first, log=log)
+    disp = H.fit_head_shape(model, verts, sol, place, masks, log=log)
+    out = params.copy()
+    base = np.zeros_like(verts, dtype=np.float32) if params.offsets is None else params.offsets
+    out.offsets = (base + disp / params.scale).astype(np.float32)
+    out, repaired = repair_offsets(model, out)
+    if repaired:
+        log(f"Kopf: an {repaired} Punkten Feinform zurückgenommen (Flächen schoben sich ineinander).")
+    new = model.rest_numpy(out)["vertices"].astype(np.float64)
+    pts = place.to_anny(sol.points)
+    info = {
+        "bilder": len(tracks), "umrisse": len(masks), "fehler_px": round(sol.error_px, 2),
+        "augenabstand_mm": round(float(np.linalg.norm(pts[468] - pts[473])) * 1000, 1),
+        "gesichtsbreite_mm": round(float(np.linalg.norm(pts[234] - pts[454])) * 1000, 1),
+        "nase_kinn_mm": round(float(np.linalg.norm(pts[H.NOSE_TIP] - pts[152])) * 1000, 1),
+        "verschiebung_max_mm": round(float(np.linalg.norm(disp, axis=1).max()) * 1000, 1),
+    }
+    skin = body_skin
+    if texture:
+        log("Hautbild des Kopfes aus der Kopfaufnahme …")
+        hs = H.bake_head(model, new, sol, place, video, masks, tracks, size=size, log=log)
+        skin = H.merge_head_skin(hs.skin if body_skin is None else body_skin, hs.skin, hs.alpha,
+                                 body_white, hs.white, log=log)
+        info["weisspunkt_kopf"] = None if hs.white is None else [round(float(w), 4) for w in hs.white]
+        if folder is not None:
+            cv2.imwrite(str(Path(folder) / "haut.jpg"), cv2.cvtColor(skin, cv2.COLOR_RGB2BGR),
+                        [cv2.IMWRITE_JPEG_QUALITY, 94])
+            sheet = H.compare_head(model, new, sol, place, video, skin)
+            if sheet is not None:
+                cv2.imwrite(str(Path(folder) / "kopfvergleich.jpg"), cv2.cvtColor(sheet, cv2.COLOR_RGB2BGR),
+                            [cv2.IMWRITE_JPEG_QUALITY, 90])
+    if folder is not None:
+        (Path(folder) / "kopf.json").write_text(json.dumps(info, indent=1), "utf-8")
+    return out, skin, info
+
+
+def video_white(path: Path, samples: int = 8) -> np.ndarray | None:
+    """Farbstich einer Aufnahme an hellen, farblosen Flächen (für ältere Scans ohne weiss.json)."""
+    from .texture import white_point, white_samples
+    from .video import read_frames
+
+    frames = list(read_frames(path, fps=1.0))
+    pick = frames[:: max(1, len(frames) // samples)]
+    return white_point([white_samples(rgb) for _, _, rgb in pick])
+
+
+def add_head(record: ScanRecord, video: Path, store: Store | None = None, presets: tuple[str, ...] = PRESETS,
+             device: str | None = None, log: Log | None = None) -> ScanResult:
+    """Kopfvideo zu einem gespeicherten Scan hinzunehmen; ergibt einen neuen Scan derselben Person."""
+    log = log or _noop
+    video = Path(video)
+    if not video.exists():
+        raise FileNotFoundError(f"Datei nicht gefunden: {video}")
+    store = store or Store()
+    model = BodyModel.get(device)
+    params = record.params()
+    skin, white = None, None
+    if (record.folder / "haut.jpg").exists():
+        skin = cv2.cvtColor(cv2.imread(str(record.folder / "haut.jpg")), cv2.COLOR_BGR2RGB)
+        if not (record.folder / "weiss.json").exists():
+            sources = [Path(p) for p in record.quality.get("quelle", [])]
+            if sources and sources[0].exists() and sources[0].suffix.lower() not in (".jpg", ".jpeg", ".png"):
+                white = video_white(sources[0])
+    folder = store.new_scan_folder(record.person_id)
+    params, skin, info = head_stage(model, params, video, skin, folder, body_white=white, log=log)
+    files, hints = _export(model, params, folder, presets, skin)
+    quality = {**record.quality, "kopf": info, "kopfvideo": str(video), "aus_scan": record.id}
+    new = store.save_scan(record.person_id, folder, params, record.inputs, record.measures, quality,
+                          record.source.split("+")[0] + "+kopf", files)
+    log(f"Fertig: {folder}")
+    return ScanResult(new, params, record.measures, None, [], files, hints)
+
+
 def reexport(record: ScanRecord, presets: tuple[str, ...] = PRESETS, device: str | None = None,
              changes: dict[str, float] | None = None, log: Log | None = None) -> dict[str, str]:
     """Gespeicherten Scan neu exportieren, optional mit geänderter Statur (z. B. weight=0.7)."""
@@ -385,4 +508,4 @@ def reexport(record: ScanRecord, presets: tuple[str, ...] = PRESETS, device: str
     return files
 
 
-__all__ = ["ScanResult", "body_from_measurements", "scan", "reexport", "cascadeur_check"]
+__all__ = ["ScanResult", "add_head", "body_from_measurements", "scan", "reexport", "cascadeur_check"]
