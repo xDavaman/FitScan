@@ -7,6 +7,7 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
+from . import level
 from .body import BodyModel, BodyParams
 from .camera import Intrinsics
 from .export import PRESETS, cascadeur_check, export_body
@@ -99,12 +100,20 @@ def scan(source: Path | list[Path], person: Person, name: str, store: Store | No
 
     if refine:
         log("Kanten der Personenmaske werden nachgeschärft (unruhiger Hintergrund) …")
-    fit_frames = []
-    for a in chosen:
-        h, w = a.rgb.shape[:2]
-        mask = refine_mask(a.rgb, a.obs.mask) if refine else a.obs.mask
-        fit_frames.append(FitFrame(mask=mask, intr=Intrinsics.phone_default(w, h),
-                                   keypoints=a.obs.keypoints, yaw_init=a.quality.yaw))
+    masks = [refine_mask(a.rgb, a.obs.mask) if refine else a.obs.mask for a in chosen]
+    keypoints = [a.obs.keypoints for a in chosen]
+    h, w = chosen[0].rgb.shape[:2]
+    intr = Intrinsics.phone_default(w, h)
+    tilt = level.estimate([a.rgb for a in chosen], masks, intr)
+    if tilt is not None and max(abs(tilt.pitch_deg), abs(tilt.roll_deg)) >= level.MIN_TILT_DEG:
+        direction = "oben" if tilt.pitch_deg > 0 else "unten"
+        log(f"Handy war um {abs(tilt.pitch_deg):.0f}° nach {direction} gekippt "
+            f"(seitlich {tilt.roll_deg:+.0f}°), wird ausgeglichen.")
+        src, intr = intr, level.leveled_intrinsics(tilt, intr, masks)
+        warped = [level.apply(tilt, src, intr, m, k) for m, k in zip(masks, keypoints, strict=True)]
+        masks, keypoints = [m for m, _ in warped], [k for _, k in warped]
+    fit_frames = [FitFrame(mask=m, intr=intr, keypoints=k, yaw_init=a.quality.yaw)
+                  for a, m, k in zip(chosen, masks, keypoints, strict=True)]
 
     model = BodyModel.get(device)
     rec = store.save_person(name, person.gender, person.age_years, person.measures)

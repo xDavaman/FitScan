@@ -25,6 +25,7 @@ Technischer Plan: https://claude.ai/code/artifact/e834733a-d72b-4a65-bdea-881002
 | `measure.py` | Maße wie mit dem Maßband (konvexe Hülle von Schnitten), differenzierbar über `MeasureProbe` |
 | `fit.py` | Anpassung an Maße (`fit_to_measurements`) und an Videobilder (`fit_to_frames`) |
 | `camera.py` | Lochkamera, Anny→Kamera, Silhouetten-Rendering |
+| `level.py` | gekipptes Handy ausgleichen: Neigung aus senkrechten Hintergrundkanten, Maske/Punkte auf waagerechte Kamera umrechnen |
 | `vision.py` | MediaPipe Pose (Körperpunkte, Maske, Blickrichtung); auf dem iPhone: Apple Vision |
 | `segment.py` | optionale Kantennachschärfung der Maske mit GrabCut (Standard aus, hilft nur bei unruhigem Hintergrund) |
 | `quality.py` | Scan-Assistent: Licht, Schärfe, Abstand, Position, A-Pose, Stillhalten, Blickwinkel |
