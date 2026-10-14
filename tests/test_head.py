@@ -102,11 +102,10 @@ def test_fit_head_shape_follows_face(model, anny_face):
     assert touched < 50
 
 
-def test_eye_weight():
-    assert H.eye_weight(None) == 1.0
-    assert H.eye_weight({"eyeLookOutLeft": 0.05}) > 0.8
-    assert H.eye_weight({"eyeLookUpLeft": 0.5}) == 0.0
-    assert H.eye_weight({"eyeBlinkLeft": 0.6}) == 0.0
+def test_eyes_open():
+    assert H.eyes_open(None)
+    assert H.eyes_open({"eyeLookOutLeft": 0.6, "eyeBlinkLeft": 0.1})
+    assert not H.eyes_open({"eyeBlinkRight": 0.6})
 
 
 def test_merge_head_skin_matches_colours():

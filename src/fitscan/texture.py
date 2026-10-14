@@ -36,6 +36,7 @@ DETAIL_POWER = 6.0  # Feinheiten fast nur aus den besten Bildern
 MAX_FLOW = 0.02  # Anteil der Personenhöhe: so weit darf die Feinausrichtung ein Bild verschieben
 ROBUST_SIGMA = 40.0  # Farbabstand (0..255) zum vorläufigen Hautbild, ab dem ein Bild kaum noch zählt
 SEEN_FULL = 0.05  # Gewichtssumme, ab der eine Stelle als sicher gesehen gilt
+CLIPPED_RAMP = 24.0  # so nah an Weiß (255) zählt ein Pixel immer weniger (überstrahlt)
 PADDING = 12  # Texel: Farbe über die Ränder der UV-Inseln hinaus (gegen Nähte beim Verkleinern)
 
 
@@ -396,6 +397,8 @@ class TextureBaker:
         blur = cv2.GaussianBlur(img, (0, 0), max(1.0, DETAIL_SIGMA * obs.person_px))
         col = _sample(img, obs.x, obs.y)
         base = _sample(blur, obs.x, obs.y)
+        # überstrahlte Stellen (Glanzlicht auf Glatze oder Stirn) zeigen nicht die Hautfarbe
+        w = w * np.clip((256.0 - col.max(1)) / CLIPPED_RAMP, 0.05, 1.0)
         if self.reference is not None:
             d = np.linalg.norm(base - self.reference[sel], axis=1)
             w = w * np.exp(-((d / ROBUST_SIGMA) ** 2))

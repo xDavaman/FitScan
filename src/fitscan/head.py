@@ -327,7 +327,7 @@ def solve_face(tracks: list[FaceTrack], intr: Intrinsics, template: np.ndarray, 
         opt.step()
         sched.step()
         if log and step % 150 == 0:
-            log(f"Gesichtsform: Schritt {step}/{steps}, Fehler {float((err * w).sum() / w.sum()):.2f} px")
+            log(f"Gesichtsform: Schritt {step}/{steps}, Fehler {float((err * w).sum().detach() / w.sum()):.2f} px")
     with torch.no_grad():
         err, w = residuals()
         mean_err = float((err * w).sum() / w.sum())
@@ -670,7 +670,6 @@ def _sparse(m) -> torch.Tensor:
 
 # ------------------------------------------------------------------------- Hautbild des Kopfes
 
-GAZE_LIMIT = 0.35  # Blick deutlich zur Seite (eyeLook…): Augäpfel aus diesem Bild nicht übernehmen
 BLINK_LIMIT = 0.3  # Lider (halb) zu
 HEAD_FEATHER = 8.0  # Texel: weicher Übergang zwischen Kopf- und Körperhautbild
 
@@ -682,15 +681,11 @@ def head_region(model: BodyModel) -> np.ndarray:
     return np.clip((np.asarray(w, np.float64) - 0.3) / 0.6, 0.0, 1.0)
 
 
-def eye_weight(shapes: dict[str, float] | None) -> float:
-    """Wie gut ein Bild die Augen zeigt: geradeaus geschaut, Lider offen."""
+def eyes_open(shapes: dict[str, float] | None) -> bool:
+    """Lider offen (MediaPipe-Mimikwerte eyeBlink…); ohne Werte: ja."""
     if not shapes:
-        return 1.0
-    look = max((v for k, v in shapes.items() if k.startswith("eyeLook")), default=0.0)
-    blink = max(shapes.get("eyeBlinkLeft", 0.0), shapes.get("eyeBlinkRight", 0.0))
-    if blink > BLINK_LIMIT:
-        return 0.0
-    return float(np.clip(1.0 - look / GAZE_LIMIT, 0.0, 1.0))
+        return True
+    return max(shapes.get("eyeBlinkLeft", 0.0), shapes.get("eyeBlinkRight", 0.0)) <= BLINK_LIMIT
 
 
 @dataclasses.dataclass
@@ -756,7 +751,7 @@ def bake_head(model: BodyModel, verts: np.ndarray, sol: FaceSolution, placement:
             person = cv2.resize(person.astype(np.uint8), shot.rgb.shape[1::-1], interpolation=cv2.INTER_NEAREST)
         whites.append(white_samples(shot.rgb, person))
         track = by_frame.get(sol.frames[k])
-        if track is not None and -forward[k, 2] > EYE_FRONTAL and eye_weight(track.shapes) > 0.8:
+        if track is not None and -forward[k, 2] > EYE_FRONTAL and eyes_open(track.shapes):
             i_px, s_px = _eye_samples(shot.rgb, track.points * shot.to_image[0, 0])
             iris.append(to_linear(i_px))
             sclera.append(to_linear(s_px))
@@ -784,14 +779,17 @@ def bake_head(model: BodyModel, verts: np.ndarray, sol: FaceSolution, placement:
         baker, skin = refined, refined.finish()
     m = baker.map
     alpha = np.zeros(size * size, np.float32)
-    alpha[m.texel] = np.clip(baker.base_w / SEEN_FULL, 0, 1)
+    # Der ganze Kopf kommt aus der Kopfaufnahme: was sie nicht zeigt (Scheitel, Hinterkopf), wird aus
+    # der gesehenen Kopfhaut ergänzt; die Körperaufnahme zeigt den Kopf nur klein und von unten
+    on_head = (head_region(model)[faces[m.face]] * m.bary).sum(1)
+    alpha[m.texel] = np.maximum(np.clip(baker.base_w / SEEN_FULL, 0, 1), on_head)
     filled = np.zeros(size * size, bool)
     filled[m.texel] = True
     alpha = _pad(np.repeat(alpha.reshape(size, size, 1), 3, -1), filled.reshape(size, size), 12)[..., 0]
     iris_c = np.median(np.concatenate(iris), 0) if sum(map(len, iris)) > 50 else None
     sclera_c = np.median(np.concatenate(sclera), 0) if sum(map(len, sclera)) > 50 else None
     if log:
-        log(f"Augen aus {len(iris)} Bildern mit Blick geradeaus: Irisfarbe "
+        log(f"Augen aus {len(iris)} Bildern mit offenen Lidern: Irisfarbe "
             + ("unbekannt" if iris_c is None else "RGB " + "/".join(str(int(v)) for v in _srgb_u8(iris_c))) + ".")
     skin, alpha = paint_eyes(model, verts, skin, alpha, iris_c, sclera_c)
     return HeadSkin(skin, alpha, white_point(whites), iris_c, sclera_c)
@@ -834,7 +832,7 @@ def _eye_samples(rgb: np.ndarray, pts: np.ndarray) -> tuple[np.ndarray, np.ndarr
     return (np.concatenate(iris) if iris else empty), (np.concatenate(sclera) if sclera else empty)
 
 
-EYE_FRONTAL = 0.9  # cos des Winkels zwischen Gesicht und Kamera für die Augenfarben (etwa 25°)
+EYE_FRONTAL = 0.8  # cos des Winkels zwischen Gesicht und Kamera für die Augenfarben (etwa 37°)
 IRIS_RADIUS = 0.0059  # Meter (Iris etwa 11,8 mm)
 PUPIL_RADIUS = 0.0019
 DEFAULT_IRIS = np.array([0.12, 0.16, 0.22], np.float32)  # linear, blaugrau
