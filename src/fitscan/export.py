@@ -100,6 +100,10 @@ def top4_weights(indices: np.ndarray, weights: np.ndarray) -> tuple[np.ndarray, 
 
 def build_rig(model: BodyModel, params: BodyParams, preset: str = "anny",
               morphs: bool = True) -> RiggedMesh:
+    if params.offsets is not None:
+        from .fit import repair_offsets
+
+        params, _ = repair_offsets(model, params)
     rest = model.rest_numpy(params)
     verts = rest["vertices"].astype(np.float64)
     template = None
@@ -107,7 +111,8 @@ def build_rig(model: BodyModel, params: BodyParams, preset: str = "anny",
         plain = params.copy()
         plain.offsets = None
         template = model.rest_numpy(plain)["vertices"]
-    report = check_mesh(verts, model.faces, template=template)
+    digits = model.dominant_bone_mask(lambda n: n.startswith(("toe", "finger", "metacarpal")))
+    report = check_mesh(verts, model.faces, template=template, digit_faces=digits[model.faces].all(1))
 
     to_y = _TO_Y_UP.copy()
     to_y[1, 3] = -verts[:, 2].min()  # Füße auf den Boden
@@ -330,7 +335,7 @@ def export_body(model: BodyModel, params: BodyParams, folder: Path, name: str = 
         suffix = "" if preset == "anny" else f"_{preset}"
         out[f"glb{suffix}"] = write_glb(rig, folder / f"{name}{suffix}.glb", name="FitScan")
         if preset == presets[0]:
-            out["hinweise"] = cascadeur_check(rig)
+            out["hinweise"] = cascadeur_check(rig) + rig.report.warnings
             if obj:
                 out["obj"] = write_obj(rig, folder / f"{name}.obj")
     return out

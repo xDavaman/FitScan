@@ -72,7 +72,10 @@ def render_mask(vertices: np.ndarray, faces: np.ndarray, yaw: float, trans: np.n
     uv = project(cam, intr)[0].numpy()
     mask = np.zeros((intr.height, intr.width), np.uint8)
     tris = np.round(uv[faces] * 4).astype(np.int32)  # 2 Bit Subpixel
-    cv2.fillPoly(mask, list(tris), 255, lineType=cv2.LINE_8, shift=2)
+    # Jedes Dreieck einzeln: fillPoly mit vielen Polygonen nutzt die Gerade-Ungerade-Regel und
+    # ließe Löcher, wo sich Vorder- und Rückseite überdecken.
+    for tri in tris:
+        cv2.fillConvexPoly(mask, tri, 255, lineType=cv2.LINE_8, shift=2)
     return mask
 
 

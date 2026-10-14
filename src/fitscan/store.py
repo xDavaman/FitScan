@@ -109,19 +109,25 @@ class Store:
                   measures: dict[str, float], quality: dict, source: str,
                   files: dict[str, str] | None = None) -> ScanRecord:
         params.save(folder)
+        # Dateien relativ zum Scanordner ablegen, damit der Datenordner verschoben werden kann
+        rel = {}
+        for key, value in (files or {}).items():
+            path = Path(value)
+            rel[key] = str(path.relative_to(folder)) if path.is_relative_to(folder) else str(path)
         info = {
             "created": dt.datetime.now().isoformat(timespec="seconds"),
             "source": source,
             "inputs": inputs,
             "measures": measures,
             "quality": quality,
-            "files": files or {},
+            "files": rel,
         }
         (folder / "scan.json").write_text(json.dumps(info, indent=2, ensure_ascii=False), "utf-8")
         return self._record(person_id, folder)
 
     def _record(self, person_id: str, folder: Path) -> ScanRecord:
         info = json.loads((folder / "scan.json").read_text("utf-8"))
+        info["files"] = {k: str(folder / v) for k, v in info.get("files", {}).items()}
         return ScanRecord(person_id=person_id, id=folder.name, folder=folder, **info)
 
     def scans(self, person_id: str) -> list[ScanRecord]:

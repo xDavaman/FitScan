@@ -222,6 +222,9 @@ WORK_SIDE = 320  # Arbeitsauflösung der Masken in Pixeln (lange Seite)
 # Gewicht der Bildterme gegenüber Maßen und Reglern. Die Bildfehler sind auf die Körperhöhe in
 # Pixeln normiert und daher sehr klein (2 px Abweichung bei 300 px Höhe ≈ 4e-5).
 SILHOUETTE_WEIGHT = 100.0
+OFFSET_SMOOTH = 4.0e4  # Glätte der Feinform (Unterschied benachbarter Punkte)
+OFFSET_SIZE = 2.0e3  # Feinform klein halten, die Form kommt vor allem aus den Reglern
+LOCAL_REG = 0.004  # Regler sanft zur Mitte ziehen (gegen unnatürliche Formen)
 
 
 @dataclasses.dataclass
@@ -372,17 +375,20 @@ def fit_to_frames(
                                torch.tensor(pose_idx, device=device)[None]),
                               axis_angle_to_matrix(pose_aa)[None])
 
-    no_offset = model.dominant_bone_mask(lambda n: n.startswith(NO_OFFSET_BONES))
-    offset_gate = torch.as_tensor((~no_offset).astype(np.float32), device=device)[:, None]
-    # Bei einem Re-Scan startet die Feinform dort, wo der letzte Scan aufgehört hat
-    start_offsets = torch.zeros(model.num_vertices, 3, device=device)
-    if init.offsets is not None:
-        start_offsets = torch.as_tensor(init.offsets, dtype=torch.float32, device=device).clone()
-    offsets_raw = torch.nn.Parameter(start_offsets)
-    edges = torch.as_tensor(_mesh_edges(model.faces), device=device)
+    # Feinform: Verschiebung je Punkt entlang der Flächennormale (verhindert Knicke und
+    # umgeklappte Dreiecke), mit weichem Übergang zu den gesperrten Bereichen.
+    edges_np = _mesh_edges(model.faces)
+    offset_gate = torch.as_tensor(_soft_gate(model, edges_np), device=device)
+    disp = torch.nn.Parameter(torch.zeros(model.num_vertices, device=device))
+    normals = torch.zeros(model.num_vertices, 3, device=device)
+    faces_t = torch.as_tensor(model.faces, device=device)
+    edges = torch.as_tensor(edges_np, device=device)
+
+    def offsets() -> torch.Tensor:
+        return (offset_gate * disp)[:, None] * normals
 
     def body(with_offsets: bool):
-        var.offsets = offsets_raw * offset_gate if with_offsets else None
+        var.offsets = offsets() if with_offsets else None
         rest = var.rest()
         posed = model.posed(rest, pose_tensor(), var.scale())
         return rest, posed["vertices"][0], posed["bone_heads"][0]
@@ -403,17 +409,24 @@ def fit_to_frames(
     stages = [
         ("Lage und Haltung", steps[0], [yaws, trans, pose_aa], False),
         ("Körperform", steps[1], [yaws, trans, pose_aa, *var.parameters()], False),
-        ("Feinform", steps[2], [yaws, trans, pose_aa, *var.parameters(), offsets_raw], True),
+        ("Feinform", steps[2], [yaws, trans, pose_aa, *var.parameters(), disp], True),
     ]
     probe = None
     for name, n_steps, params, with_offsets in stages:
         opt = torch.optim.Adam([
-            {"params": [p for p in params if p is not offsets_raw], "lr": 0.02},
-            {"params": [p for p in params if p is offsets_raw], "lr": 0.002},
+            {"params": [p for p in params if p is not disp], "lr": 0.02},
+            {"params": [p for p in params if p is disp], "lr": 0.001},
         ])
         for step in range(n_steps):
             if step % 50 == 0:
                 with torch.no_grad():
+                    if with_offsets:
+                        plain, _, _ = body(False)
+                        normals = _vertex_normals(plain["vertices"][0] / var.scale(), faces_t)
+                        if step == 0 and init.offsets is not None:
+                            # Re-Scan: Feinform des letzten Scans als Start
+                            start = torch.as_tensor(init.offsets, dtype=torch.float32, device=device)
+                            disp.copy_((start * normals).sum(-1))
                     rest, _, _ = body(with_offsets)
                     probe = MeasureProbe(model, rest["vertices"][0].cpu().numpy(),
                                          rest["bone_heads"][0].cpu().numpy())
@@ -422,19 +435,23 @@ def fit_to_frames(
             loss = sum(_frame_loss(verts, heads, yaws[i], trans[i], preps[i], model) for i in range(k)) / k
             loss = silhouette_weight * loss
             loss = loss + 0.5 * measurement_loss(probe.evaluate(rest["vertices"][0]), targets)
-            loss = loss + 0.004 * (var.local_values() ** 2).sum()
+            loss = loss + LOCAL_REG * (var.local_values() ** 2).sum()
             loss = loss + 0.01 * (pose_aa ** 2).sum()
             if with_offsets:
-                o = offsets_raw * offset_gate
-                loss = loss + 400.0 * (o[edges[:, 0]] - o[edges[:, 1]]).pow(2).sum(-1).mean()
-                loss = loss + 20.0 * o.pow(2).sum(-1).mean()
+                d = offset_gate * disp
+                loss = loss + OFFSET_SMOOTH * (d[edges[:, 0]] - d[edges[:, 1]]).pow(2).mean()
+                loss = loss + OFFSET_SIZE * d.pow(2).mean()
             loss.backward()
             opt.step()
             if log and step % 40 == 0:
                 log(f"{name}: Schritt {step}/{n_steps}, Fehler {loss.item():.5f}")
 
-    var.offsets = (offsets_raw * offset_gate).detach()
-    params = exact_height(model, var.to_params(), targets["height"])
+    var.offsets = offsets().detach()
+    params, repaired = repair_offsets(model, var.to_params())
+    if log and repaired:
+        log(f"Feinform an {repaired} Punkten geglättet (umgeklappte Dreiecke verhindert).")
+    var.offsets = None if params.offsets is None else torch.as_tensor(params.offsets, device=device)
+    params = exact_height(model, params, targets["height"])
 
     # Passgenauigkeit pro Bild
     results = []
@@ -449,6 +466,63 @@ def fit_to_frames(
         union = (rendered | prep["mask"]).sum()
         results.append(FrameFitResult(math.degrees(float(yaws[i].detach())) % 360, float(inter / max(union, 1))))
     return params, measure_params(model, params), results
+
+
+def _soft_gate(model: BodyModel, edges: np.ndarray, rings: int = 8) -> np.ndarray:
+    """1 = Feinform erlaubt, 0 = gesperrt (Kopf, Hände, Füße); dazwischen ein weicher Übergang."""
+    gate = (~model.dominant_bone_mask(lambda n: n.startswith(NO_OFFSET_BONES))).astype(np.float32)
+    count = np.bincount(edges.ravel(), minlength=len(gate)).astype(np.float32)
+    for _ in range(rings):
+        acc = np.zeros_like(gate)
+        np.add.at(acc, edges[:, 0], gate[edges[:, 1]])
+        np.add.at(acc, edges[:, 1], gate[edges[:, 0]])
+        gate = np.minimum(gate, acc / np.maximum(count, 1))
+    return gate
+
+
+def _vertex_normals(verts: torch.Tensor, faces: torch.Tensor) -> torch.Tensor:
+    v0, v1, v2 = verts[faces[:, 0]], verts[faces[:, 1]], verts[faces[:, 2]]
+    fn = torch.cross(v1 - v0, v2 - v0, dim=-1)
+    vn = torch.zeros_like(verts).index_add_(0, faces[:, 0], fn).index_add_(0, faces[:, 1], fn)
+    vn = vn.index_add_(0, faces[:, 2], fn)
+    return vn / vn.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+
+
+def repair_offsets(model: BodyModel, params: BodyParams, rounds: int = 12) -> tuple[BodyParams, int]:
+    """Nimmt die Feinform dort zurück, wo sie Dreiecke umklappt oder Flächen ineinander schiebt.
+    Gibt die Zahl der betroffenen Punkte zurück."""
+    from .mesh_check import self_intersections
+
+    if params.offsets is None:
+        return params, 0
+    plain = params.copy()
+    plain.offsets = None
+    template = model.rest_numpy(plain)["vertices"]
+    faces = model.faces
+
+    def fnormals(v):
+        return np.cross(v[faces[:, 1]] - v[faces[:, 0]], v[faces[:, 2]] - v[faces[:, 0]])
+
+    ref = fnormals(template)
+    base = self_intersections(template, faces)
+    offsets = params.offsets.astype(np.float32).copy()
+    touched: set[int] = set()
+    for i in range(rounds):
+        trial = params.copy()
+        trial.offsets = offsets
+        verts = model.rest_numpy(trial)["vertices"]
+        bad_faces = set(np.flatnonzero((fnormals(verts) * ref).sum(1) < 0).tolist())
+        for a, b in self_intersections(verts, faces) - base:
+            bad_faces.update((a, b))
+        if not bad_faces:
+            break
+        bad = np.unique(faces[sorted(bad_faces)])
+        ring = np.unique(faces[np.isin(faces, bad).any(1)])
+        touched.update(ring.tolist())
+        offsets[ring] *= 0.0 if i == rounds - 1 else 0.5
+    out = params.copy()
+    out.offsets = offsets
+    return out, len(touched)
 
 
 def _mesh_edges(faces: np.ndarray) -> np.ndarray:

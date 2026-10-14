@@ -12,6 +12,7 @@ from .camera import Intrinsics
 from .export import PRESETS, cascadeur_check, export_body
 from .fit import FitFrame, FrameFitResult, Person, fit_to_frames, fit_to_measurements
 from .quality import ScanReport
+from .segment import refine_mask
 from .store import ScanRecord, Store
 
 Log = Callable[[str], None]
@@ -62,7 +63,7 @@ def body_from_measurements(person: Person, name: str, store: Store | None = None
 
 def scan(source: Path | list[Path], person: Person, name: str, store: Store | None = None,
          presets: tuple[str, ...] = PRESETS, device: str | None = None, fps: float = 4.0,
-         log: Log | None = None) -> ScanResult:
+         refine: bool = True, log: Log | None = None) -> ScanResult:
     """Video oder Fotos -> angepasster, riggbarer Körper als GLB/OBJ, gespeichert beim Namen."""
     from .video import analyze, read_frames, read_images, select_for_fit
     from .vision import PoseAnalyzer
@@ -92,10 +93,12 @@ def scan(source: Path | list[Path], person: Person, name: str, store: Store | No
         raise ValueError("Kein Bild war für die Anpassung brauchbar. " + " ".join(report.summary))
     log(f"{len(chosen)} Bilder aus verschiedenen Blickwinkeln werden verwendet.")
 
+    log("Person wird freigestellt, Kanten werden nachgeschärft …")
     fit_frames = []
     for a in chosen:
         h, w = a.rgb.shape[:2]
-        fit_frames.append(FitFrame(mask=a.obs.mask, intr=Intrinsics.phone_default(w, h),
+        mask = refine_mask(a.rgb, a.obs.mask) if refine else a.obs.mask
+        fit_frames.append(FitFrame(mask=mask, intr=Intrinsics.phone_default(w, h),
                                    keypoints=a.obs.keypoints, yaw_init=a.quality.yaw))
 
     model = BodyModel.get(device)

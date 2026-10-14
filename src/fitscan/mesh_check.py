@@ -24,8 +24,10 @@ class MeshReport:
     degenerate_faces: int
     nonfinite_vertices: int
     flipped_faces: int
+    intersections: int
     volume_m3: float
     problems: list[str]
+    warnings: list[str] = dataclasses.field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -34,7 +36,7 @@ class MeshReport:
     def summary(self) -> str:
         if self.ok:
             return (f"Netz in Ordnung: {self.vertices} Punkte, {self.faces} Dreiecke, "
-                    f"{self.components} geschlossene Teile, wasserdicht.")
+                    f"{self.components} geschlossene Teile, wasserdicht, ohne Selbstüberschneidung.")
         return "Netz fehlerhaft: " + " ".join(self.problems)
 
 
@@ -53,8 +55,71 @@ def vertex_normals(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
     return vn / np.maximum(length, 1e-12)
 
 
+def _segment_hits_triangle(p0, p1, a, b, c, eps=1e-9) -> np.ndarray:
+    """Vektorisierter Möller-Trumbore-Test: schneidet die Strecke p0-p1 das Dreieck abc?"""
+    d = p1 - p0
+    e1, e2 = b - a, c - a
+    h = np.cross(d, e2)
+    det = (e1 * h).sum(1)
+    ok = np.abs(det) > 1e-15
+    inv = 1.0 / np.where(ok, det, 1.0)
+    s = p0 - a
+    u = (s * h).sum(1) * inv
+    q = np.cross(s, e1)
+    v = (d * q).sum(1) * inv
+    t = (e2 * q).sum(1) * inv
+    return ok & (u > eps) & (v > eps) & (u + v < 1 - eps) & (t > eps) & (t < 1 - eps)
+
+
+def self_intersections(vertices: np.ndarray, faces: np.ndarray) -> set[tuple[int, int]]:
+    """Paare sich schneidender Dreiecke (ohne Nachbarn mit gemeinsamem Punkt)."""
+    tri = vertices[faces]
+    lo, hi = tri.min(1), tri.max(1)
+    edge = np.linalg.norm(tri[:, 1] - tri[:, 0], axis=1)
+    cell = 2.0 * float(np.median(edge))
+    c0 = np.floor(lo / cell).astype(np.int64)
+    c1 = np.floor(hi / cell).astype(np.int64)
+    keys, owners = [], []
+    span = c1 - c0
+    for dx in range(int(span[:, 0].max()) + 1):
+        for dy in range(int(span[:, 1].max()) + 1):
+            for dz in range(int(span[:, 2].max()) + 1):
+                sel = (span[:, 0] >= dx) & (span[:, 1] >= dy) & (span[:, 2] >= dz)
+                c = c0[sel] + np.array([dx, dy, dz])
+                keys.append((c[:, 0] * 73856093) ^ (c[:, 1] * 19349663) ^ (c[:, 2] * 83492791))
+                owners.append(np.where(sel)[0])
+    keys, owners = np.concatenate(keys), np.concatenate(owners)
+    order = np.argsort(keys, kind="stable")
+    keys, owners = keys[order], owners[order]
+    starts = np.flatnonzero(np.r_[True, keys[1:] != keys[:-1]])
+    sizes = np.diff(np.r_[starts, len(keys)])
+    pairs = []
+    for size in np.unique(sizes[sizes > 1]):
+        groups = starts[sizes == size][:, None] + np.arange(size)[None]
+        ia, ib = np.triu_indices(size, 1)
+        members = owners[groups]
+        pairs.append(np.stack([members[:, ia].ravel(), members[:, ib].ravel()], 1))
+    if not pairs:
+        return set()
+    pairs = np.sort(np.concatenate(pairs), axis=1)
+    pairs = np.unique(pairs[pairs[:, 0] != pairs[:, 1]], axis=0)
+    i, j = pairs[:, 0], pairs[:, 1]
+    overlap = np.all((lo[i] <= hi[j]) & (lo[j] <= hi[i]), axis=1)
+    shared = (faces[i][:, :, None] == faces[j][:, None, :]).any((1, 2))
+    i, j = i[overlap & ~shared], j[overlap & ~shared]
+    hit = np.zeros(len(i), bool)
+    for x, y in ((i, j), (j, i)):
+        a, b, c = tri[y, 0], tri[y, 1], tri[y, 2]
+        for k in range(3):
+            hit |= _segment_hits_triangle(tri[x, k], tri[x, (k + 1) % 3], a, b, c)
+    return set(zip(i[hit].tolist(), j[hit].tolist(), strict=True))
+
+
 def check_mesh(vertices: np.ndarray, faces: np.ndarray, template: np.ndarray | None = None,
-               min_area: float = 1e-12) -> MeshReport:
+               min_area: float = 1e-12, intersections: bool = True,
+               digit_faces: np.ndarray | None = None) -> MeshReport:
+    """template: dieselbe Form ohne Feinform (für umgeklappte Dreiecke und neue Überschneidungen).
+    digit_faces: Dreiecke an Fingern und Zehen; Berührungen zwischen ihnen sind normal."""
     problems: list[str] = []
     nonfinite = int((~np.isfinite(vertices)).any(axis=1).sum())
     if nonfinite:
@@ -80,6 +145,27 @@ def check_mesh(vertices: np.ndarray, faces: np.ndarray, template: np.ndarray | N
     if degenerate:
         problems.append(f"{degenerate} Dreiecke ohne Fläche.")
 
+    warnings: list[str] = []
+    crossing = 0
+    if intersections:
+        labels = trimesh.graph.connected_component_labels(mesh.face_adjacency, node_count=len(faces))
+        main = labels == np.bincount(labels).argmax()  # Körper; Augen und Mundraum sitzen bewusst darin
+        digits = np.zeros(len(faces), bool) if digit_faces is None else digit_faces
+
+        def relevant(pairs: set[tuple[int, int]]) -> set[tuple[int, int]]:
+            return {(i, j) for i, j in pairs if main[i] and main[j] and not (digits[i] and digits[j])}
+
+        found = relevant(self_intersections(vertices, faces))
+        if template is not None:
+            base = relevant(self_intersections(template, faces))
+            crossing = len(found - base)
+            if crossing:
+                problems.append(f"{crossing} Dreieckspaare durchdringen sich durch die Feinanpassung.")
+            found &= base
+        if found:
+            warnings.append(f"{len(found)} Dreieckspaare berühren sich durch die Körperform "
+                            "(z. B. Oberschenkel innen); für Animation unkritisch.")
+
     flipped = 0
     if template is not None:
         a = face_normals(vertices, faces)
@@ -91,5 +177,6 @@ def check_mesh(vertices: np.ndarray, faces: np.ndarray, template: np.ndarray | N
     return MeshReport(
         vertices=len(vertices), faces=len(faces), components=len(parts), watertight=watertight,
         winding_consistent=winding, outward=outward, degenerate_faces=degenerate,
-        nonfinite_vertices=nonfinite, flipped_faces=flipped, volume_m3=volume, problems=problems,
+        nonfinite_vertices=nonfinite, flipped_faces=flipped, intersections=crossing,
+        volume_m3=volume, problems=problems, warnings=warnings,
     )

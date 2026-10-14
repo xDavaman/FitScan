@@ -1,8 +1,8 @@
 """GLB in FBX (oder .blend) umwandeln, mit Blender. Läuft in Blender, nicht in FitScan selbst.
 
 Aufruf:
-    blender -b -P tools/blender_glb_to_fbx.py -- koerper.glb koerper.fbx
-    blender -b -P tools/blender_glb_to_fbx.py -- koerper.glb koerper.blend
+    blender -b -P src/fitscan/blender_glb_to_fbx.py -- koerper.glb koerper.fbx
+    blender -b -P src/fitscan/blender_glb_to_fbx.py -- koerper.glb koerper.blend
 
 Die FBX-Einstellungen sind auf Cascadeur und Spiele-Engines abgestimmt: Maßstab 1 an der
 Wurzel, keine zusätzlichen Endknochen, Y oben, Formregler als Blendshapes.

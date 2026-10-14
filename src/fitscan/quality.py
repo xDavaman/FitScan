@@ -37,6 +37,7 @@ LIMITS = {
     "min_person_luma": 70,  # 0..255
     "max_person_luma": 225,
     "max_backlight": 50,  # Hintergrund heller als Person um mehr als ...
+    "backlight_person_luma": 110,  # ... und die Person selbst eher dunkel
     "min_sharpness": 25.0,  # Varianz des Laplace-Filters auf 400 px Personenhöhe
     "min_height_fraction": 0.45,
     "max_height_fraction": 0.92,
@@ -115,8 +116,8 @@ def check_frame(rgb: np.ndarray, obs: FrameObservation, prev: FrameObservation |
             add("dunkel", "Zu dunkel. Mehr Licht von vorn oder oben.", ROT)
         elif p_luma > LIMITS["max_person_luma"]:
             add("hell", "Überbelichtet. Licht etwas weicher machen oder Abstand zur Lampe vergrößern.", GELB)
-        if b_luma - p_luma > LIMITS["max_backlight"]:
-            add("gegenlicht", "Gegenlicht: Das Licht kommt von hinten. Fenster oder Lampe hinter dich bringen.", GELB)
+        if b_luma - p_luma > LIMITS["max_backlight"] and p_luma < LIMITS["backlight_person_luma"]:
+            add("gegenlicht", "Gegenlicht: Hinter dir ist es heller als vorn. Fenster oder Lampe gehören hinter die Kamera, nicht hinter dich.", GELB)
 
     # Schärfe im Personenbereich
     ys, xs = np.where(person)
@@ -255,7 +256,7 @@ CHECKLIST = [
     "Eng anliegende Kleidung, keine weiten Ärmel oder Hosen; lange Haare zusammenbinden",
     "Ruhiger, einfarbiger Hintergrund, der sich farblich von Kleidung und Haut abhebt",
     "Helles, gleichmäßiges Licht von vorn oder oben, kein Fenster oder keine Lampe hinter dir",
-    "Etwa 2 bis 3 m Abstand, Handy auf Hüfthöhe (Stativ), ganzer Körper von Kopf bis Fuß im Bild",
+    "Etwa 2 m Abstand, Handy hochkant auf Hüfthöhe (Stativ), ganzer Körper mit etwas Rand über Kopf und unter Füßen im Bild",
     "A-Pose: Arme gestreckt, etwa 30° vom Körper, Füße schulterbreit, Blick geradeaus",
     "Langsam einmal komplett auf der Stelle drehen (etwa 20 Sekunden für eine Runde)",
 ]
