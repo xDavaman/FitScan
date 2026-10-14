@@ -82,6 +82,8 @@ def main(argv: list[str] | None = None) -> None:
     p_scan = sub.add_parser("scan", help="Körper aus Video oder Fotos")
     p_scan.add_argument("quelle", nargs="+", type=Path)
     p_scan.add_argument("--fps", type=float, default=4.0, help="ausgewertete Bilder pro Sekunde")
+    p_scan.add_argument("--kanten-nachschaerfen", action="store_true",
+                        help="Personenmaske nachschärfen (nur bei unruhigem Hintergrund sinnvoll)")
     _add_person_args(p_scan)
 
     p_body = sub.add_parser("koerper", aliases=["body"], help="Körper nur aus Maßen")
@@ -134,7 +136,8 @@ def main(argv: list[str] | None = None) -> None:
 
         person = _person(args)
         source = args.quelle[0] if len(args.quelle) == 1 else list(args.quelle)
-        _print_result(scan(source, person, args.name, device=args.geraet, fps=args.fps, log=print))
+        _print_result(scan(source, person, args.name, device=args.geraet, fps=args.fps,
+                           refine=args.kanten_nachschaerfen, log=print))
     elif cmd in ("koerper", "body"):
         from .pipeline import body_from_measurements
 

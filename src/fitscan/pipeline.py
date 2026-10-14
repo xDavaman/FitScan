@@ -63,8 +63,12 @@ def body_from_measurements(person: Person, name: str, store: Store | None = None
 
 def scan(source: Path | list[Path], person: Person, name: str, store: Store | None = None,
          presets: tuple[str, ...] = PRESETS, device: str | None = None, fps: float = 4.0,
-         refine: bool = True, log: Log | None = None) -> ScanResult:
-    """Video oder Fotos -> angepasster, riggbarer Körper als GLB/OBJ, gespeichert beim Namen."""
+         refine: bool = False, log: Log | None = None) -> ScanResult:
+    """Video oder Fotos -> angepasster, riggbarer Körper als GLB/OBJ, gespeichert beim Namen.
+
+    refine: Maskenkanten mit GrabCut nachschärfen. Hilft bei unruhigem Hintergrund, schadet bei
+    ruhigem Hintergrund leicht (Testvideo: Brust 2,5 statt 3,2 cm Abweichung ohne Nachschärfen).
+    """
     from .video import analyze, read_frames, read_images, select_for_fit
     from .vision import PoseAnalyzer
 
@@ -93,7 +97,8 @@ def scan(source: Path | list[Path], person: Person, name: str, store: Store | No
         raise ValueError("Kein Bild war für die Anpassung brauchbar. " + " ".join(report.summary))
     log(f"{len(chosen)} Bilder aus verschiedenen Blickwinkeln werden verwendet.")
 
-    log("Person wird freigestellt, Kanten werden nachgeschärft …")
+    if refine:
+        log("Kanten der Personenmaske werden nachgeschärft (unruhiger Hintergrund) …")
     fit_frames = []
     for a in chosen:
         h, w = a.rgb.shape[:2]

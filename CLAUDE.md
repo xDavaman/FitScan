@@ -26,6 +26,7 @@ Technischer Plan: https://claude.ai/code/artifact/e834733a-d72b-4a65-bdea-881002
 | `fit.py` | Anpassung an Maße (`fit_to_measurements`) und an Videobilder (`fit_to_frames`) |
 | `camera.py` | Lochkamera, Anny→Kamera, Silhouetten-Rendering |
 | `vision.py` | MediaPipe Pose (Körperpunkte, Maske, Blickrichtung); auf dem iPhone: Apple Vision |
+| `segment.py` | optionale Kantennachschärfung der Maske mit GrabCut (Standard aus, hilft nur bei unruhigem Hintergrund) |
 | `quality.py` | Scan-Assistent: Licht, Schärfe, Abstand, Position, A-Pose, Stillhalten, Blickwinkel |
 | `video.py` | Video/Fotos einlesen, prüfen, bestes Bild pro Blickwinkel wählen |
 | `mesh_check.py` | wasserdicht, Orientierung, kaputte oder umgeklappte Dreiecke |
@@ -61,6 +62,9 @@ uv pip install -p .venv/bin/python -e ".[prototyp,dev]"
 - Unter Linux braucht MediaPipe `libegl1 libgles2 libgl1`.
 - Anny legt beim ersten Start einen Zwischenspeicher unter `~/.cache/anny` an (gut 1 GB), danach schnell.
 - Ohne eigenes Video testen: `synthetic.film()` (Silhouetten) oder `synthetic.film_video()` (gerendertes Drehvideo).
+- Körperpunkt-Versatz MediaPipe → Anny-Gelenke: `src/fitscan/data/keypoint_offsets.json`,
+  neu berechnen mit `scripts/calibrate_keypoints.py`.
+- Gradio `Model3D` zeigt keine Werte aus Generatoren an; Vorschau daher per `.then()` setzen.
 - Die Skills unter `.claude/skills/` beschreiben die wiederkehrenden Abläufe (Fit, Export prüfen, Scan bewerten …).
 
 ## Abnahme vor dem Wechsel auf Mac/iPhone

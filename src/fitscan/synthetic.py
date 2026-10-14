@@ -70,7 +70,7 @@ def film(model: BodyModel, params: BodyParams, arm_deg: float = 0.0, views: int 
             kp[mp_idx, :2] += rng.normal(0, 3.0, 2)
             kp[mp_idx, 2] = 0.9
         yaw_noisy = yaw + rng.normal(0, 0.2)
-        frames.append(FitFrame(mask=mask, intr=intr, keypoints=kp,
+        frames.append(FitFrame(mask=mask, intr=intr, keypoints=kp, calibrated=False,
                                yaw_init=math.atan2(math.sin(yaw_noisy), math.cos(yaw_noisy))))
     return frames
 

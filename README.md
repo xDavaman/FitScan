@@ -24,6 +24,7 @@ Weitere Befehle über die Startdatei, z. B. in der Eingabeaufforderung im FitSca
 start_windows.bat live                    :: Webcam-Assistent mit Ampel, Leertaste nimmt auf
 start_windows.bat pruefen video.mp4       :: nur die Aufnahme bewerten
 start_windows.bat scan video.mp4 --name Sean --geschlecht m --alter 30 --groesse 182 --gewicht 84
+start_windows.bat scan video.mp4 --name Sean --groesse 182 --gewicht 84 --kanten-nachschaerfen   :: unruhiger Hintergrund
 start_windows.bat koerper --name Sean --groesse 182 --gewicht 84 --taille 86
 start_windows.bat selbsttest
 start_windows.bat info                    :: Grafikkarte, Versionen, Blender gefunden?
@@ -66,6 +67,13 @@ A-Pose als Ruhepose, symmetrisches Skelett, Formregler `weight_up/down` und `mus
   `start_windows.bat export <scanordner> --statur-gewicht 0.7 --statur-muskeln 0.6`.
 
 Re-Scans unter demselben Namen starten beim letzten Scan; die Oberfläche zeigt die Veränderung der Maße.
+
+## Stand der Genauigkeit
+
+Gemessen an gerenderten Testvideos mit bekannten Maßen (Selbsttest, MediaPipe-Freistellung):
+Umfänge im Mittel unter 1 cm daneben, Körpergröße exakt, Blickrichtung je Bild richtig erkannt.
+Der Brustumfang fällt derzeit 2 bis 3 cm zu klein aus. Mit dem Maßband gemessener Brustumfang
+als Eingabe gleicht das aus. Die Abnahme mit echten Handyvideos steht noch aus.
 
 ## Lizenzen
 

@@ -15,7 +15,7 @@ import numpy as np
 import torch
 
 from .body import GENDER_VALUES, BodyModel, BodyParams, age_to_param, axis_angle_to_matrix
-from .camera import MEDIAPIPE_TO_BONE, Intrinsics, project, render_mask, to_camera
+from .camera import KEYPOINT_OFFSETS, MEDIAPIPE_TO_BONE, Intrinsics, project, render_mask, to_camera
 from .measure import CIRCUMFERENCES, MeasureProbe, measure_params
 
 # Welcher lokale Anny-Regler zu welchem Maß gehört
@@ -217,14 +217,18 @@ VIDEO_LOCALS = [
 # Regionen, in denen keine Feinverschiebungen erlaubt sind (Masken dort zu ungenau)
 NO_OFFSET_BONES = ("head", "eye", "finger", "metacarpal", "wrist", "toe", "foot")
 
-WORK_SIDE = 320  # Arbeitsauflösung der Masken in Pixeln (lange Seite)
+WORK_SIDE = 640  # Arbeitsauflösung der Masken in Pixeln (lange Seite)
 
 # Gewicht der Bildterme gegenüber Maßen und Reglern. Die Bildfehler sind auf die Körperhöhe in
 # Pixeln normiert und daher sehr klein (2 px Abweichung bei 300 px Höhe ≈ 4e-5).
 SILHOUETTE_WEIGHT = 100.0
 OFFSET_SMOOTH = 4.0e4  # Glätte der Feinform (Unterschied benachbarter Punkte)
 OFFSET_SIZE = 2.0e3  # Feinform klein halten, die Form kommt vor allem aus den Reglern
-LOCAL_REG = 0.004  # Regler sanft zur Mitte ziehen (gegen unnatürliche Formen)
+LOCAL_REG = 0.0005  # Regler sanft zur Mitte ziehen (gegen unnatürliche Formen)
+# Körperpunkte richten Lage und Haltung aus; für die Form zählen vor allem die Silhouetten,
+# denn MediaPipe-Punkte liegen nicht exakt auf Annys Gelenken.
+KEYPOINT_WEIGHT_SHAPE = 0.5
+MUSCLE_STARTS = (0.25, 0.75)  # zusätzliche Startwerte für den Muskelanteil
 
 
 @dataclasses.dataclass
@@ -233,6 +237,7 @@ class FitFrame:
     intr: Intrinsics
     keypoints: np.ndarray | None = None  # (33, 3) Pixel + Sichtbarkeit (MediaPipe-Reihenfolge)
     yaw_init: float | None = None
+    calibrated: bool = True  # False: Punkte liegen exakt auf Annys Gelenken (künstliche Testdaten)
 
 
 @dataclasses.dataclass
@@ -253,7 +258,7 @@ def _prepare_frame(frame: FitFrame, device) -> dict:
     contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     contour = max(contours, key=len)[:, 0, :].astype(np.float32)
     idx = np.linspace(0, len(contour) - 1, min(400, len(contour))).astype(int)
-    kp_bones, kp_xy, kp_w = [], [], []
+    kp_bones, kp_xy, kp_w, kp_off = [], [], [], []
     if frame.keypoints is not None:
         for mp_idx, bone in MEDIAPIPE_TO_BONE.items():
             x, y, vis = frame.keypoints[mp_idx]
@@ -261,6 +266,7 @@ def _prepare_frame(frame: FitFrame, device) -> dict:
                 kp_bones.append(bone)
                 kp_xy.append([x * factor, y * factor])
                 kp_w.append(float(vis))
+                kp_off.append(KEYPOINT_OFFSETS[mp_idx] if frame.calibrated else np.zeros(3, np.float32))
     return {
         "intr": intr,
         "mask": mask,
@@ -271,12 +277,18 @@ def _prepare_frame(frame: FitFrame, device) -> dict:
         "kp_bones": kp_bones,
         "kp_xy": torch.as_tensor(np.array(kp_xy, np.float32).reshape(-1, 2), device=device),
         "kp_w": torch.as_tensor(np.array(kp_w, np.float32), device=device),
+        "kp_off": torch.as_tensor(np.array(kp_off, np.float32).reshape(-1, 3), device=device),
     }
 
 
-def _frame_loss(verts, heads, yaw, trans, prep, model: BodyModel) -> torch.Tensor:
+def _frame_loss(verts, heads, yaw, trans, prep, model: BodyModel, kp_weight: float = 1.0) -> torch.Tensor:
     intr = prep["intr"]
-    pts = torch.cat([verts, heads], 0)
+    kp3d = heads[:0]
+    if prep["kp_bones"]:
+        idx = torch.tensor([model.bone(b) for b in prep["kp_bones"]], device=verts.device)
+        height = verts[:, 2].max() - verts[:, 2].min()
+        kp3d = heads[idx] + prep["kp_off"] * height  # MediaPipe-Punkte sitzen nicht genau im Gelenk
+    pts = torch.cat([verts, kp3d], 0)
     uv = project(to_camera(pts, yaw[None], trans[None]), intr)[0]
     uv_v, uv_h = uv[: len(verts)], uv[len(verts):]
     h_px = prep["px_height"]
@@ -287,9 +299,8 @@ def _frame_loss(verts, heads, yaw, trans, prep, model: BodyModel) -> torch.Tenso
     l_cov = (torch.cdist(prep["contour"], uv_v).min(1).values / h_px).pow(2).mean()
     loss = 4.0 * l_in + 4.0 * l_cov
     if prep["kp_bones"]:
-        idx = torch.tensor([model.bone(b) for b in prep["kp_bones"]], device=verts.device)
-        diff = (uv_h[idx] - prep["kp_xy"]) / h_px
-        loss = loss + 1.0 * (prep["kp_w"] * diff.pow(2).sum(-1)).mean()
+        diff = (uv_h - prep["kp_xy"]) / h_px
+        loss = loss + kp_weight * (prep["kp_w"] * diff.pow(2).sum(-1)).mean()
     return loss
 
 
@@ -406,24 +417,21 @@ def fit_to_frames(
     trans = torch.nn.Parameter(torch.tensor(trans_init, dtype=torch.float32, device=device))
     yaws = torch.nn.Parameter(torch.tensor(yaw_init, dtype=torch.float32, device=device))
 
-    stages = [
-        ("Lage und Haltung", steps[0], [yaws, trans, pose_aa], False),
-        ("Körperform", steps[1], [yaws, trans, pose_aa, *var.parameters()], False),
-        ("Feinform", steps[2], [yaws, trans, pose_aa, *var.parameters(), disp], True),
-    ]
-    probe = None
-    for name, n_steps, params, with_offsets in stages:
+    def run_stage(name: str, n_steps: int, params: list, with_offsets: bool, kp_w: float,
+                  first: bool = True) -> float:
+        nonlocal normals
         opt = torch.optim.Adam([
             {"params": [p for p in params if p is not disp], "lr": 0.02},
             {"params": [p for p in params if p is disp], "lr": 0.001},
         ])
+        probe, last = None, float("inf")
         for step in range(n_steps):
             if step % 50 == 0:
                 with torch.no_grad():
                     if with_offsets:
                         plain, _, _ = body(False)
                         normals = _vertex_normals(plain["vertices"][0] / var.scale(), faces_t)
-                        if step == 0 and init.offsets is not None:
+                        if step == 0 and first and init.offsets is not None:
                             # Re-Scan: Feinform des letzten Scans als Start
                             start = torch.as_tensor(init.offsets, dtype=torch.float32, device=device)
                             disp.copy_((start * normals).sum(-1))
@@ -432,7 +440,8 @@ def fit_to_frames(
                                          rest["bone_heads"][0].cpu().numpy())
             opt.zero_grad()
             rest, verts, heads = body(with_offsets)
-            loss = sum(_frame_loss(verts, heads, yaws[i], trans[i], preps[i], model) for i in range(k)) / k
+            loss = sum(_frame_loss(verts, heads, yaws[i], trans[i], preps[i], model, kp_w)
+                       for i in range(k)) / k
             loss = silhouette_weight * loss
             loss = loss + 0.5 * measurement_loss(probe.evaluate(rest["vertices"][0]), targets)
             loss = loss + LOCAL_REG * (var.local_values() ** 2).sum()
@@ -443,8 +452,37 @@ def fit_to_frames(
                 loss = loss + OFFSET_SIZE * d.pow(2).mean()
             loss.backward()
             opt.step()
+            last = loss.item()
             if log and step % 40 == 0:
-                log(f"{name}: Schritt {step}/{n_steps}, Fehler {loss.item():.5f}")
+                log(f"{name}: Schritt {step}/{n_steps}, Fehler {last:.5f}")
+        return last
+
+    view_params = [yaws, trans, pose_aa]
+    shape_params = [*view_params, *var.parameters()]
+    run_stage("Lage und Haltung", steps[0], view_params, False, 1.0)
+
+    # Körperform: Muskelanteil und Fettanteil sehen bei gleichem Gewicht ähnlich aus. Mehrere
+    # Startwerte für die Muskeln kurz anrechnen und mit dem besten weitermachen.
+    tracked = [yaws, trans, pose_aa, *var.parameters()]
+    snapshot = [t.detach().clone() for t in tracked]
+    muscle_i = var.free.index("muscle")
+    start_muscle = float(torch.sigmoid(var.pheno_raw[muscle_i].detach()))
+    trial_steps = max(1, steps[1] // 3)
+    best = None
+    for m0 in dict.fromkeys([start_muscle, MUSCLE_STARTS[0], MUSCLE_STARTS[1]]):
+        with torch.no_grad():
+            for t, v in zip(tracked, snapshot, strict=True):
+                t.copy_(v)
+            var.pheno_raw[muscle_i] = torch.logit(torch.tensor(m0, device=device))
+        score = run_stage(f"Körperform (Start Muskeln {m0:.2f})", trial_steps, shape_params, False,
+                          KEYPOINT_WEIGHT_SHAPE)
+        if best is None or score < best[0]:
+            best = (score, [t.detach().clone() for t in tracked])
+    with torch.no_grad():
+        for t, v in zip(tracked, best[1], strict=True):
+            t.copy_(v)
+    run_stage("Körperform", steps[1] - trial_steps, shape_params, False, KEYPOINT_WEIGHT_SHAPE)
+    run_stage("Feinform", steps[2], [*shape_params, disp], True, KEYPOINT_WEIGHT_SHAPE)
 
     var.offsets = offsets().detach()
     params, repaired = repair_offsets(model, var.to_params())

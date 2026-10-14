@@ -7,7 +7,9 @@ z vom Objektiv weg) gebracht, dass eine Person mit Drehung 0 direkt in die Kamer
 from __future__ import annotations
 
 import dataclasses
+import json
 import math
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -25,6 +27,17 @@ MEDIAPIPE_TO_BONE = {
     25: "lowerleg01.L", 26: "lowerleg01.R",
     27: "foot.L", 28: "foot.R",
 }
+
+
+def _load_keypoint_offsets() -> dict[int, np.ndarray]:
+    """Geeichter Versatz MediaPipe-Punkt -> Anny-Gelenk (Anteil der Körpergröße), siehe
+    scripts/calibrate_keypoints.py. Ohne Datei: kein Versatz."""
+    path = Path(__file__).with_name("data") / "keypoint_offsets.json"
+    data = json.loads(path.read_text("utf-8"))["versatz"] if path.exists() else {}
+    return {k: np.array(data.get(str(k), [0.0, 0.0, 0.0]), np.float32) for k in MEDIAPIPE_TO_BONE}
+
+
+KEYPOINT_OFFSETS = _load_keypoint_offsets()
 
 
 @dataclasses.dataclass

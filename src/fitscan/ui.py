@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import queue
 import threading
 from collections.abc import Callable, Iterator
@@ -65,7 +66,7 @@ def _files(result) -> list[str]:
     return [v for k, v in result.files.items() if k.startswith(("glb", "obj"))]
 
 
-def run_scan(files, name, gender, age, height, weight, *optional):
+def run_scan(files, name, gender, age, height, weight, refine, *optional):
     from . import pipeline
 
     if not files:
@@ -78,7 +79,8 @@ def run_scan(files, name, gender, age, height, weight, *optional):
         yield "\n".join(problems), None, None, None, ""
         return
     source = paths[0] if len(paths) == 1 else paths
-    for log, result in _stream(lambda log: pipeline.scan(source, person, name or "Ich", log=log)):
+    for log, result in _stream(lambda log: pipeline.scan(source, person, name or "Ich",
+                                                         refine=bool(refine), log=log)):
         if result is None:
             yield log, None, None, None, ""
         else:
@@ -164,14 +166,27 @@ def run_selftest(quick: bool):
         yield (log if result is None else result.text())
 
 
+def _show(path: str | None) -> str | None:
+    return path
+
+
+def _offline_env() -> None:
+    """Gradio soll nichts nach Hause melden und nichts nachladen (FitScan läuft offline)."""
+    for key, value in (("GRADIO_ANALYTICS_ENABLED", "False"), ("HF_HUB_OFFLINE", "1"),
+                       ("HF_HUB_DISABLE_TELEMETRY", "1"), ("DO_NOT_TRACK", "1")):
+        os.environ.setdefault(key, value)
+
+
 def build():
+    _offline_env()
     import gradio as gr
 
     with gr.Blocks(title="FitScan") as demo:
         gr.Markdown("# FitScan\nRiggbares 1:1-Körpermodell aus Video und Körpermaßen. Läuft komplett offline.")
         with gr.Tab("1. Vorbereitung"):
             gr.Markdown("## So gelingt der Scan\n" + "\n".join(f"- {c}" for c in CHECKLIST))
-            gr.Markdown("Live-Prüfung mit der Webcam: `fitscan live` im Startmenü-Fenster.")
+            gr.Markdown("Live-Prüfung mit der Webcam: `start_windows.bat live` im FitScan-Ordner ausführen. "
+                        "Die Ampel zeigt, ob Licht, Abstand und Haltung stimmen; Leertaste nimmt auf.")
         with gr.Tab("2. Scan"):
             with gr.Row():
                 with gr.Column():
@@ -184,15 +199,19 @@ def build():
                     weight = gr.Number(label="Gewicht (kg, Pflicht)")
                     with gr.Accordion("Weitere Maße (optional, Maßband)", open=False):
                         optional = [gr.Number(label=f"{MEASURES[k][0]} (cm)") for k in OPTIONAL]
+                    refine = gr.Checkbox(label="Kanten nachschärfen (nur bei unruhigem Hintergrund)",
+                                         value=False)
                     start = gr.Button("Scan starten", variant="primary")
+                    glb_path = gr.State()
                 with gr.Column():
                     model3d = gr.Model3D(label="Körpermodell")
                     table = gr.Dataframe(headers=["Maß", "Modell", "Eingabe"], label="Maße")
                     report = gr.Markdown()
                     downloads = gr.File(label="Dateien", file_count="multiple")
                     log = gr.Textbox(label="Ablauf", lines=8)
-            start.click(run_scan, [files, name, gender, age, height, weight, *optional],
-                        [log, table, model3d, downloads, report])
+            # Model3D zeigt Werte aus laufenden Generatoren nicht an, daher im Folgeschritt setzen
+            start.click(run_scan, [files, name, gender, age, height, weight, refine, *optional],
+                        [log, table, glb_path, downloads, report]).then(_show, glb_path, model3d)
         with gr.Tab("3. Nur aus Maßen"):
             with gr.Row():
                 with gr.Column():
@@ -203,13 +222,14 @@ def build():
                     m_weight = gr.Number(label="Gewicht (kg)")
                     m_optional = [gr.Number(label=f"{MEASURES[k][0]} (cm)") for k in OPTIONAL]
                     m_start = gr.Button("Körper erstellen", variant="primary")
+                    m_glb = gr.State()
                 with gr.Column():
                     m_model = gr.Model3D(label="Körpermodell")
                     m_table = gr.Dataframe(headers=["Maß", "Modell", "Eingabe"], label="Maße")
                     m_files = gr.File(label="Dateien", file_count="multiple")
                     m_log = gr.Textbox(label="Ablauf", lines=6)
             m_start.click(run_measures_only, [m_name, m_gender, m_age, m_height, m_weight, *m_optional],
-                          [m_log, m_table, m_model, m_files])
+                          [m_log, m_table, m_glb, m_files]).then(_show, m_glb, m_model)
         with gr.Tab("4. Verlauf und Statur"):
             with gr.Row():
                 who = gr.Dropdown(person_choices(), label="Person", allow_custom_value=True)
