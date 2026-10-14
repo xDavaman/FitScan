@@ -1,0 +1,48 @@
+[project]
+name = "fitscan"
+version = "0.1.0"
+description = "Riggbares, geschlossenes 3D-Körpermodell aus Handyvideo und Körpermaßen (Windows-Prototyp)"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "anny==0.6.1",
+    "torch>=2.7",
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "trimesh>=4.0",
+    "opencv-python>=4.9",
+]
+
+[project.optional-dependencies]
+# Kamera-Analyse (Körperpunkte, Personenmaske) und Oberfläche für den PC-Prototyp
+prototyp = [
+    "mediapipe>=0.10.14",
+    "gradio>=5.0",
+]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "pygltflib>=1.16",
+]
+
+[project.scripts]
+fitscan = "fitscan.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fitscan"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: braucht mehrere Minuten (Fit an synthetische Videos)"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]

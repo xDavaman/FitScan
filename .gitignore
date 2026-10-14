@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+# Arbeitsdaten: Personen, Scans, Videos und Exporte bleiben lokal
+daten/
+models/
+*.mp4
+*.mov
+*.glb
+*.fbx
+*.obj
+!tests/data/**
