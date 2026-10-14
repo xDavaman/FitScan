@@ -117,20 +117,18 @@ def main(argv: list[str] | None = None) -> None:
         if path:
             print(f"Letzte Aufnahme: {path}\nWeiter mit: fitscan scan \"{path}\" --groesse … --gewicht …")
     elif cmd in ("pruefen", "check"):
-        from .pipeline import IMAGE_SUFFIXES
+        from .pipeline import check_recordings
         from .quality import sector_name
-        from .video import analyze, read_frames, read_images
-        from .vision import PoseAnalyzer
 
-        is_video = len(args.quelle) == 1 and args.quelle[0].suffix.lower() not in IMAGE_SUFFIXES
-        analyzer = PoseAnalyzer(video_mode=is_video)
-        frames = read_frames(args.quelle[0]) if is_video else read_images(args.quelle)
-        _, report = analyze(frames, analyzer, print)
-        analyzer.close()
-        print(f"\nErgebnis: {report.level} ({report.usable} von {report.frames} Bildern brauchbar)")
-        print("Erfasste Blickwinkel:", ", ".join(sector_name(i) for i, c in enumerate(report.covered) if c) or "keine")
-        for line in report.summary:
-            print(" -", line)
+        for rec in check_recordings(list(args.quelle), log=print, keep_frames=False):
+            if rec.report is None:
+                continue
+            report = rec.report
+            print(f"\n{rec.label} – Ergebnis: {report.level} ({report.usable} von {report.frames} Bildern brauchbar)")
+            print("Erfasste Blickwinkel:",
+                  ", ".join(sector_name(i) for i, c in enumerate(report.covered) if c) or "keine")
+            for line in report.summary:
+                print(" -", line)
     elif cmd == "scan":
         from .pipeline import scan
 

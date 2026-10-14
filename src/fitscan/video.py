@@ -22,10 +22,18 @@ class AnalyzedFrame:
     quality: FrameQuality
 
 
+VIDEO_HINT = ("Falls es ein iPhone-Video ist: am iPhone unter Einstellungen › Kamera › Formate "
+              "„Maximale Kompatibilität“ wählen und neu aufnehmen, oder das Video in MP4 (H.264) umwandeln.")
+HEIC_HINT = ("HEIC-Fotos (iPhone-Standard) kann FitScan noch nicht lesen. Bitte als JPG speichern: "
+             "am iPhone unter Einstellungen › Kamera › Formate „Maximale Kompatibilität“ wählen "
+             "oder die Fotos am PC als JPG exportieren.")
+
+
 def read_frames(path: Path, fps: float = 4.0) -> Iterator[tuple[int, float, np.ndarray]]:
     cap = cv2.VideoCapture(str(path))
     if not cap.isOpened():
-        raise ValueError(f"Video lässt sich nicht öffnen: {path}")
+        cap.release()
+        raise ValueError(f"Video lässt sich nicht öffnen: {Path(path).name}. {VIDEO_HINT}")
     src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     step = max(1, round(src_fps / fps))
     index = 0
@@ -43,13 +51,18 @@ def read_frames(path: Path, fps: float = 4.0) -> Iterator[tuple[int, float, np.n
             index += 1
     finally:
         cap.release()
+    if index == 0:
+        # Container ließ sich öffnen, aber kein Bild dekodieren (z. B. fehlender HEVC-Decoder)
+        raise ValueError(f"Video enthält keine lesbaren Bilder: {Path(path).name}. {VIDEO_HINT}")
 
 
 def read_images(paths: list[Path]) -> Iterator[tuple[int, float, np.ndarray]]:
     for i, p in enumerate(paths):
         bgr = cv2.imread(str(p))
         if bgr is None:
-            raise ValueError(f"Bild lässt sich nicht öffnen: {p}")
+            if Path(p).suffix.lower() in (".heic", ".heif"):
+                raise ValueError(f"Foto lässt sich nicht öffnen: {Path(p).name}. {HEIC_HINT}")
+            raise ValueError(f"Foto lässt sich nicht öffnen: {Path(p).name}. Erwartet wird ein Foto als JPG oder PNG.")
         h, w = bgr.shape[:2]
         factor = MAX_SIDE / max(h, w)
         if factor < 1:

@@ -40,6 +40,86 @@ def _noop(_: str) -> None:
     pass
 
 
+def source_groups(paths: list[Path]) -> list[list[Path]]:
+    """Ausgewählte Dateien in Aufnahmen aufteilen: jedes Video einzeln, alle Fotos zusammen."""
+    paths = list(dict.fromkeys(Path(p) for p in paths))  # doppelt ausgewählte Dateien nur einmal
+    videos = [p for p in paths if p.suffix.lower() in VIDEO_SUFFIXES]
+    images = [p for p in paths if p.suffix.lower() in IMAGE_SUFFIXES]
+    other = [p for p in paths if p not in videos and p not in images]
+    if other:
+        raise ValueError("Dateiformat wird nicht unterstützt: " + ", ".join(p.name for p in other)
+                         + ". Möglich sind Videos (" + ", ".join(sorted(VIDEO_SUFFIXES))
+                         + ") und Fotos (" + ", ".join(sorted(IMAGE_SUFFIXES)) + ").")
+    if not videos and not images:
+        raise ValueError("Keine Datei ausgewählt.")
+    return [[v] for v in videos] + ([images] if images else [])
+
+
+@dataclasses.dataclass
+class Recording:
+    paths: list[Path]
+    is_video: bool
+    label: str
+    frames: list  # AnalyzedFrame
+    report: ScanReport | None
+    error: str | None = None
+
+
+def _score(rec: Recording) -> tuple[int, int]:
+    return (sum(rec.report.covered), rec.report.usable) if rec.report is not None else (-1, -1)
+
+
+def check_recordings(paths: list[Path], fps: float = 4.0, log: Log | None = None,
+                     keep_frames: bool = True) -> list[Recording]:
+    """Jede Aufnahme prüfen: jedes Video einzeln (eigene Kamera, eigene Neigung), Fotos zusammen.
+
+    keep_frames: die Bilder der bisher besten Aufnahme behalten (für die Anpassung), alle anderen
+    sofort verwerfen, damit mehrere 4K-Videos nicht gleichzeitig im Speicher liegen."""
+    from .video import analyze, read_frames, read_images
+    from .vision import PoseAnalyzer
+
+    log = log or _noop
+    groups = source_groups(paths)
+    out = []
+    for group in groups:
+        is_video = group[0].suffix.lower() in VIDEO_SUFFIXES
+        label = group[0].name if is_video else f"{len(group)} Fotos"
+        log(f"Bilder werden geprüft (Licht, Position, Haltung): {label} …")
+        analyzer = PoseAnalyzer(video_mode=is_video)
+        try:
+            frames = read_frames(group[0], fps=fps) if is_video else read_images(group)
+            analyzed, report = analyze(frames, analyzer, log)
+            out.append(Recording(group, is_video, label, analyzed, report))
+        except ValueError as exc:
+            if len(groups) == 1:
+                raise
+            log(f"{label}: {exc}")
+            out.append(Recording(group, is_video, label, [], None, str(exc)))
+        finally:
+            analyzer.close()
+        if len(groups) > 1 and out[-1].report is not None:
+            r = out[-1].report
+            log(f"{label}: {r.usable} von {r.frames} Bildern brauchbar, "
+                f"{sum(r.covered)} von {len(r.covered)} Blickwinkeln.")
+        best = max(out, key=_score)
+        for rec in out:
+            if rec is not best or not keep_frames:
+                rec.frames = []
+    return out
+
+
+def best_recording(recordings: list[Recording], log: Log | None = None) -> Recording:
+    """Die Aufnahme mit den meisten erfassten Blickwinkeln (dann den meisten brauchbaren Bildern)."""
+    log = log or _noop
+    readable = [r for r in recordings if r.report is not None]
+    if not readable:
+        raise ValueError(" ".join(r.error or "" for r in recordings).strip())
+    best = max(readable, key=_score)
+    if len(recordings) > 1:
+        log(f"Verwendet wird {best.label}.")
+    return best
+
+
 def _export(model: BodyModel, params: BodyParams, folder: Path, presets) -> tuple[dict[str, str], list[str]]:
     out = export_body(model, params, folder, presets=presets)
     hints = list(out.pop("hinweise", []))
@@ -73,8 +153,7 @@ def scan(source: Path | list[Path], person: Person, name: str, store: Store | No
     refine: Maskenkanten mit GrabCut nachschärfen. Hilft bei unruhigem Hintergrund, schadet bei
     ruhigem Hintergrund leicht (Testvideo: Brust 2,5 statt 3,2 cm Abweichung ohne Nachschärfen).
     """
-    from .video import analyze, read_frames, read_images, select_for_fit
-    from .vision import PoseAnalyzer
+    from .video import select_for_fit
 
     log = log or _noop
     problems = person.validate()
@@ -82,18 +161,11 @@ def scan(source: Path | list[Path], person: Person, name: str, store: Store | No
         raise ValueError(" ".join(problems))
     store = store or Store()
     paths = [Path(p) for p in (source if isinstance(source, list) else [source])]
-    is_video = len(paths) == 1 and paths[0].suffix.lower() in VIDEO_SUFFIXES
     for p in paths:
         if not p.exists():
             raise FileNotFoundError(f"Datei nicht gefunden: {p}")
-
-    log("Bilder werden geprüft (Licht, Position, Haltung) …")
-    analyzer = PoseAnalyzer(video_mode=is_video)
-    try:
-        frames = read_frames(paths[0], fps=fps) if is_video else read_images(paths)
-        analyzed, report = analyze(frames, analyzer, log)
-    finally:
-        analyzer.close()
+    recording = best_recording(check_recordings(paths, fps, log), log)
+    paths, analyzed, report, is_video = recording.paths, recording.frames, recording.report, recording.is_video
     for line in report.summary:
         log(line)
     chosen = select_for_fit(analyzed)

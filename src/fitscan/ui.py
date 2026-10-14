@@ -190,8 +190,8 @@ def build():
         with gr.Tab("2. Scan"):
             with gr.Row():
                 with gr.Column():
-                    files = gr.File(label="Video oder Fotos", file_count="multiple",
-                                    file_types=["video", "image"])
+                    files = gr.File(label="Ein Video oder mehrere Fotos (bei mehreren Videos wird das beste "
+                                          "verwendet)", file_count="multiple", file_types=["video", "image"])
                     name = gr.Textbox(label="Name", value="Ich")
                     gender = gr.Dropdown(list(GENDERS), value="Männlich", label="Geschlecht")
                     age = gr.Number(label="Alter (Jahre)", value=30)
