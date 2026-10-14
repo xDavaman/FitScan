@@ -7,6 +7,9 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
+import cv2
+import numpy as np
+
 from . import level
 from .body import BodyModel, BodyParams
 from .camera import Intrinsics
@@ -131,14 +134,39 @@ def scan(source: Path | list[Path], person: Person, name: str, store: Store | No
     files, hints = _export(model, params, folder, presets)
     quality = {
         "bericht": report.to_json(),
-        "bilder": [dataclasses.asdict(r) for r in frame_results],
+        "bilder": [r.to_json() for r in frame_results],
         "quelle": [str(p) for p in paths],
     }
     record = store.save_scan(rec.id, folder, params, person.measures, measures, quality,
                              "video" if is_video else "bilder", files)
     (folder / "bilder.json").write_text(json.dumps(quality["bilder"], indent=2), "utf-8")
+    sheet = fit_sheet(frame_results)
+    if sheet is not None:
+        cv2.imwrite(str(folder / "passung.png"), cv2.cvtColor(sheet, cv2.COLOR_RGB2BGR))
     log(f"Fertig: {folder}")
     return ScanResult(record, params, measures, report, frame_results, files, hints)
+
+
+def fit_sheet(results: list[FrameFitResult], height: int = 360, per_row: int = 6) -> np.ndarray | None:
+    """Übersicht der Passung je Bild (grün passt, rot nur im Video, blau nur im Modell)."""
+    tiles = []
+    for r in results:
+        if r.overlay is None:
+            continue
+        h, w = r.overlay.shape[:2]
+        tile = cv2.resize(r.overlay, (max(1, round(w * height / h)), height), interpolation=cv2.INTER_AREA)
+        cv2.putText(tile, f"{r.yaw_deg:.0f} Grad  {r.iou:.2f}", (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                    (30, 30, 30), 1, cv2.LINE_AA)
+        tiles.append(tile)
+    if not tiles:
+        return None
+    width = max(t.shape[1] for t in tiles)
+    tiles = [cv2.copyMakeBorder(t, 0, 0, 0, width - t.shape[1], cv2.BORDER_CONSTANT, value=(245, 245, 245))
+             for t in tiles]
+    while len(tiles) % per_row:
+        tiles.append(np.full_like(tiles[0], 245))
+    rows = [np.hstack(tiles[i:i + per_row]) for i in range(0, len(tiles), per_row)]
+    return np.vstack(rows)
 
 
 def reexport(record: ScanRecord, presets: tuple[str, ...] = PRESETS, device: str | None = None,

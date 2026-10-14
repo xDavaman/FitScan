@@ -244,6 +244,11 @@ class FitFrame:
 class FrameFitResult:
     yaw_deg: float
     iou: float
+    # Bild zur Kontrolle: grün = passt, rot = nur im Video (Modell zu schmal), blau = nur im Modell
+    overlay: np.ndarray | None = dataclasses.field(default=None, repr=False, compare=False)
+
+    def to_json(self) -> dict:
+        return {"yaw_deg": self.yaw_deg, "iou": self.iou}
 
 
 def _prepare_frame(frame: FitFrame, device) -> dict:
@@ -502,7 +507,12 @@ def fit_to_frames(
                                prep["intr"]) > 0
         inter = (rendered & prep["mask"]).sum()
         union = (rendered | prep["mask"]).sum()
-        results.append(FrameFitResult(math.degrees(float(yaws[i].detach())) % 360, float(inter / max(union, 1))))
+        overlay = np.full((*rendered.shape, 3), 245, np.uint8)
+        overlay[rendered & prep["mask"]] = (110, 180, 110)
+        overlay[prep["mask"] & ~rendered] = (220, 60, 60)
+        overlay[rendered & ~prep["mask"]] = (60, 100, 230)
+        results.append(FrameFitResult(math.degrees(float(yaws[i].detach())) % 360, float(inter / max(union, 1)),
+                                      overlay))
     return params, measure_params(model, params), results
 
 
