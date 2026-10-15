@@ -25,6 +25,8 @@ start_windows.bat live                    :: Webcam-Assistent mit Ampel, Leertas
 start_windows.bat pruefen video.mp4       :: nur die Aufnahme bewerten
 start_windows.bat scan video.mp4 --name Sean --geschlecht m --alter 30 --groesse 182 --gewicht 84
 start_windows.bat scan video.mp4 --name Sean --groesse 182 --gewicht 84 --kanten-nachschaerfen   :: unruhiger Hintergrund
+start_windows.bat scan video.mp4 --kopfvideo kopf.mp4 --name Sean --groesse 182 --gewicht 84   :: mit Kopfaufnahme
+start_windows.bat kopf kopf.mp4 --name Sean   :: Kopfaufnahme zum letzten Scan hinzunehmen
 start_windows.bat koerper --name Sean --groesse 182 --gewicht 84 --taille 86
 start_windows.bat selbsttest
 start_windows.bat info                    :: Grafikkarte, Versionen, Blender gefunden?
@@ -39,6 +41,11 @@ start_windows.bat info                    :: Grafikkarte, Versionen, Blender gef
 - A-Pose: Arme gestreckt, etwa 30° vom Körper, Füße schulterbreit
 - Einmal langsam auf der Stelle drehen (etwa 20 Sekunden)
 
+**Kopfaufnahme (optional, für Gesicht, Ohren und Augen):** Handy hochkant etwa 40 cm vor dem
+Gesicht, Kopf langsam nach links und rechts (bis die Ohren zu sehen sind), nach oben und unten
+drehen, neutral schauen, Mund geschlossen, etwa 30 Sekunden. Heller, ruhiger Hintergrund hilft beim
+Freistellen des Kopfumrisses.
+
 Körpergröße und Gewicht sind Pflicht. Mit dem Maßband gemessene Umfänge (Brust, Taille, Hüfte …)
 machen das Modell genauer. Der Webcam-Assistent (`live`) zeigt mit einer Ampel, ob Licht, Abstand,
 Position und Haltung stimmen, und mit einem Kreis, welche Seiten schon erfasst sind.
@@ -51,15 +58,61 @@ Jeder Scan landet in `daten/personen/<name>/scans/<datum>/`:
 |---|---|
 | `koerper.glb` | Modell mit Skelett, Gewichten und Formreglern, Knochennamen wie Anny (`upperarm01.L`) – für Blender |
 | `koerper_unreal.glb` | dasselbe mit Knochennamen im Unreal-Stil (`upperarm_l`) – für Cascadeur, Unreal, Unity |
-| `koerper.obj` | nur das Netz (z. B. für 3D-Druck oder Bildhauerprogramme) |
+| `koerper.obj` | nur das Netz (z. B. für 3D-Druck oder Bildhauerprogramme), mit `.mtl` und Hautbild |
+| `haut.jpg` | Hautbild aus dem Video (Hautton, Tattoos, Muttermale, Kleidung) auf Annys UV-Karte, 4096 × 4096 |
+| `ansichten.json` | Lage und Haltung des Körpers in jedem verwendeten Videobild |
+| `feinform.json` | Feinform: Abstand der Modellränder zum Umriss im Video vorher/nachher, Verschiebung je Körperbereich |
+| `kopf.json`, `kopfvergleich.jpg` | nur mit Kopfaufnahme: Gesichtsmaße, Passgenauigkeit, Foto und Modell nebeneinander |
+| `augen.jpg` | nur mit Kopfaufnahme: eigenes, feines Bild der Augäpfel (zweites Material „Augen“ in GLB, FBX, OBJ) |
 | `params.json`, `offsets.npy` | Körperparameter; daraus wird jeder Re-Scan weitergerechnet |
 | `scan.json`, `bilder.json` | Maße, Eingaben, Qualitätsbericht, Passgenauigkeit je Bild |
 
 Eigenschaften: echte Größe in Metern, Füße auf dem Boden, Y oben, geschlossenes Netz ohne Löcher,
 A-Pose als Ruhepose, symmetrisches Skelett, Formregler `weight_up/down` und `muscle_up/down`.
 
-- **Blender:** Datei → Importieren → glTF 2.0 → `koerper.glb`.
+**Feinform (Muskeln als Form):** Nach der groben Anpassung werden 48 Bilder rundherum genau
+ausgerichtet. Dann verschiebt sich jeder Punkt des Netzes glatt entlang seiner Normalen, bis die
+Randlinie des Modells in jedem Bild auf dem Umriss der Person liegt und nirgends darüber hinausragt;
+Lage und Haltung jedes Bildes werden dabei mit nachgeschärft. So kommen Schulter-, Arm-, Brust- und
+Rückenmuskeln, Bauch, Gesäß und Waden als echte Form ins Modell (beim Testvideo lagen die
+Modellränder vorher im Mittel 8,6 mm neben dem Umriss, danach 4,7 mm). Eingegebene Maßbandwerte
+bleiben dabei erhalten; Kopf, Hände und Füße bleiben unverändert. Für das Hautbild werden die Bilder
+danach auf der neuen Form noch einmal ausgerichtet, damit Schrift und Tattoos nicht doppelt liegen.
+Grenze: Was von keiner Seite am Rand liegt (Rinne der Wirbelsäule, Linien zwischen den
+Bauchmuskeln), bleibt so glatt wie die Vorlage und ist nur als Schatten im Hautbild zu sehen. Ohne
+Feinform (schneller): Häkchen entfernen oder `--ohne-feinform`.
+
+**Hautbild:** Jedes Videobild wird einzeln ausgerichtet (Drehung, Lage, Haltung von Armen und
+Beinen), dann werden die Farben auf die Körperoberfläche übertragen. Ein zweiter Durchgang schiebt
+jedes Bild per optischem Fluss nach, damit Tattoos und Schrift aus allen Bildern genau
+übereinanderliegen. Feinheiten kommen aus den schärfsten, frontalsten Bildern, die Grundfarbe aus
+vielen. Nie gesehene Stellen (Fußsohlen, Achseln) werden aus der Umgebung aufgefüllt. Das Licht der
+Aufnahme steckt im Hautbild; ein Farbstich des Lichts wird an hellen, farblosen Flächen im Hintergrund
+(weiße Wand) gemessen und herausgerechnet. iPhone-Videos in HDR (Standard bei neueren iPhones)
+werden in voller Farbtiefe gelesen und auf normale Helligkeit umgerechnet; sonst wären helle Haut
+und Wände überstrahlt und Augenbrauen, Poren und Fältchen gingen verloren. Ohne Hautbild (schneller):
+Häkchen in der Oberfläche entfernen oder `--ohne-hautbild`.
+
+**Kopf:** Mit Kopfaufnahme sucht MediaPipe Face Landmarker (Apache 2.0) in jedem Bild 478
+Gesichtspunkte. Ein Bündelausgleich über alle Bilder ergibt daraus die Gesichtsform und die Kopflage
+je Bild. Annys Kopf wird glatt so verformt, dass ihr Gesicht auf diese Form passt; danach werden
+Schädel und Ohren an den Kopfumriss in allen Bildern angepasst (GrabCut-Freistellung). Das Hautbild
+von Gesicht, Kopfhaut und Ohren kommt scharf aus der Kopfaufnahme; nur streifend gesehene Stellen
+(Hinterkopf, Scheitel) werden aus der Umgebung ergänzt. Die Augen werden mit der gemessenen Iris-
+und Augenweißfarbe und in der gemessenen Blickrichtung neu gezeichnet, in einem eigenen Bild
+(etwa zehnmal feiner als in Annys Hautbild). Ist der Schädel flacher oder höher als bei Anny,
+gleicht der Hals aus, damit die eingegebene Körpergröße bleibt. Skelett, Netz und UV-Karte bleiben
+gleich; das Modell bleibt riggbar und geschlossen. Mimik (offener Mund, Lächeln) wird übergangen; Haare sind (noch) nur Farbe
+auf der Kopfhaut.
+
+- **Blender:** Datei → Importieren → glTF 2.0 → `koerper.glb`. Blender zeigt das Modell zuerst grau
+  (Volumenansicht); Haut und Augen erscheinen in der Materialvorschau (Taste Z). Für Farben wie im
+  Video unter Render → Farbmanagement die Ansichtstransformation „Standard“ wählen. `koerper.blend`
+  öffnet schon so.
 - **Cascadeur:** `koerper_unreal.glb` importieren (oder FBX, siehe unten), dann Quick Rigging.
+  Cascadeur übernimmt die Bilder nicht aus der Datei: Körper anklicken, Objekt-Eigenschaften →
+  Material → Base Color Map → `koerper_haut.jpg` (Augen: `koerper_augen.jpg`), und unter Mesh object
+  „Always show textures“ einschalten.
 - **FBX:** Blender (kostenlos) installieren, dann im Reiter „Verlauf und Statur“ auf „FBX erstellen“
   oder `start_windows.bat fbx pfad\koerper_unreal.glb`. Liegt Blender nicht am Standardort, den Pfad zu
   `blender.exe` in der Umgebungsvariable `FITSCAN_BLENDER` angeben.
@@ -78,7 +131,9 @@ als Eingabe gleicht das aus. Die Abnahme mit echten Handyvideos steht noch aus.
 ## Lizenzen
 
 FitScan nutzt nur frei und kommerziell nutzbare Bausteine: Anny (Apache 2.0, Daten CC0),
-PyTorch (BSD), MediaPipe (Apache 2.0), OpenCV (Apache 2.0), Gradio (Apache 2.0), trimesh (MIT).
+PyTorch (BSD), MediaPipe mit Pose- und Face-Landmarker-Modell (Apache 2.0), OpenCV (Apache 2.0),
+Gradio (Apache 2.0), trimesh (MIT), SciPy (BSD), PyAV (BSD) mit FFmpeg-Bibliotheken (LGPL,
+unverändert als eigenständige Bibliotheken) für HDR-Videos.
 Kein SMPL. Blender wird nur als eigenständiges Programm aufgerufen. Die Modelle, die du mit
 FitScan erzeugst, gehören dir und können in andere Projekte übernommen werden.
 Prüfung: `python scripts/check_licenses.py`.

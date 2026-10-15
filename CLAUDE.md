@@ -24,12 +24,15 @@ Technischer Plan: https://claude.ai/code/artifact/e834733a-d72b-4a65-bdea-881002
 | `body.py` | Anny laden (`BodyModel.get`), `BodyParams` (Phänotyp, lokale Regler, Maßstab, Feinform-Offsets) |
 | `measure.py` | Maße wie mit dem Maßband (konvexe Hülle von Schnitten), differenzierbar über `MeasureProbe` |
 | `fit.py` | Anpassung an Maße (`fit_to_measurements`) und an Videobilder (`fit_to_frames`) |
+| `refine.py` | Feinform aus 48 Umrissen rundherum (Muskeln, Brust, Rücken als Form): Randlinie des Modells auf den Umriss, glatte Schritte („Large Steps“), Maßbandwerte bleiben |
 | `camera.py` | Lochkamera, Anny→Kamera, Silhouetten-Rendering |
 | `level.py` | gekipptes Handy ausgleichen: Neigung aus senkrechten Hintergrundkanten, Maske/Punkte auf waagerechte Kamera umrechnen |
 | `vision.py` | MediaPipe Pose (Körperpunkte, Maske, Blickrichtung); auf dem iPhone: Apple Vision |
 | `segment.py` | optionale Kantennachschärfung der Maske mit GrabCut (Standard aus, hilft nur bei unruhigem Hintergrund) |
 | `quality.py` | Scan-Assistent: Licht, Schärfe, Abstand, Position, A-Pose, Stillhalten, Blickwinkel |
-| `video.py` | Video/Fotos einlesen, prüfen, bestes Bild pro Blickwinkel wählen |
+| `video.py` | Video/Fotos einlesen (iPhone-HDR/HLG über PyAV selbst nach sRGB), prüfen, bestes Bild pro Blickwinkel wählen |
+| `head.py` | Kopfaufnahme: Gesichtspunkte (MediaPipe Face Landmarker), Bündelausgleich, Kopf verformen (Gesicht, Schädel, Ohren), Kopf-Hautbild, Augen zeichnen |
+| `texture.py` | Hautbild: UV-Karte, Sichtbarkeit je Bild, Farben in zwei Lagen mischen, Lücken füllen, Feinausrichtung per optischem Fluss, Vorschau-Rendering |
 | `mesh_check.py` | wasserdicht, Orientierung, kaputte oder umgeklappte Dreiecke |
 | `export.py` | eigener GLB-Exporter (Skelett, Gewichte, Formregler), OBJ, Cascadeur-Prüfung, Namensschemata |
 | `blender.py`, `blender_glb_to_fbx.py` | optional FBX/.blend über installiertes Blender |
@@ -61,8 +64,20 @@ uv pip install -p .venv/bin/python -e ".[prototyp,dev]"
 ```
 
 - Unter Linux braucht MediaPipe `libegl1 libgles2 libgl1`.
+- iPhone-Videos sind meist HDR (HEVC 10 Bit, HLG, BT.2020). OpenCV liest sie überstrahlt (Gesicht zu ~75 % bei 255);
+  `video.py` liest sie deshalb mit PyAV roh und rechnet selbst um (`hdr_to_srgb`). Prüfen: `ffprobe … color_transfer`.
 - Anny legt beim ersten Start einen Zwischenspeicher unter `~/.cache/anny` an (gut 1 GB), danach schnell.
 - Ohne eigenes Video testen: `synthetic.film()` (Silhouetten) oder `synthetic.film_video()` (gerendertes Drehvideo).
+- Hautbild: `fit.fit_views` richtet jedes Bild bei fester Form aus (eigene Haltung je Bild),
+  `pipeline.bake_skin` überträgt die Farben. GLB braucht dafür doppelte Punkte an UV-Nähten
+  (`RiggedMesh.split_at_seams`), Blender führt sie beim Import wieder zusammen (`merge_vertices`).
+- Kopf: `pipeline.head_stage` (in `scan(head_video=…)` und `add_head`). Gesichtspunkt → Stelle auf
+  Annys Netz: `data/face_landmarks_anny.json`, neu mit `scripts/calibrate_face.py`. Annys Augäpfel und
+  Mundraum stecken bewusst in Lidern und Lippen; `repair_offsets` und `mesh_check` zählen nur
+  Überschneidungen des Körpers selbst. Flächen, die sich berühren, ohne verbunden zu sein (Lippen,
+  Lider), werden beim Verformen gekoppelt (`head._contact_pairs`).
+- iPhone-Videos sind HDR (HLG). OpenCV liest sie ohne Tonemapping; die Farben sehen dabei
+  natürlich aus, ffmpeg-Tonemapping wirkte flauer.
 - Körperpunkt-Versatz MediaPipe → Anny-Gelenke: `src/fitscan/data/keypoint_offsets.json`,
   neu berechnen mit `scripts/calibrate_keypoints.py`.
 - Gradio `Model3D` zeigt keine Werte aus Generatoren an; Vorschau daher per `.then()` setzen.

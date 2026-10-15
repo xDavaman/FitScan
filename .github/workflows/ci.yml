@@ -48,4 +48,5 @@ jobs:
         run: |
           .venv/bin/python -m fitscan koerper --name CI --groesse 180 --gewicht 80
           npm install --no-save --silent gltf-validator@2.0.0-dev.3.10
-          node scripts/validate_gltf.mjs "$FITSCAN_HOME"/personen/ci/scans/*/*.glb
+          .venv/bin/python -c "import os, numpy as np; from fitscan.body import BodyModel, BodyParams; from fitscan.export import build_rig, write_glb; write_glb(build_rig(BodyModel.get('cpu'), BodyParams(), skin=np.full((256, 256, 3), 180, np.uint8)), os.environ['FITSCAN_HOME'] + '/haut_probe.glb')"
+          node scripts/validate_gltf.mjs "$FITSCAN_HOME"/personen/ci/scans/*/*.glb "$FITSCAN_HOME"/haut_probe.glb
