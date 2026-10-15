@@ -212,15 +212,14 @@ def scan(source: Path | list[Path], person: Person, name: str, store: Store | No
         "bilder": [r.to_json() for r in frame_results],
         "quelle": [str(p) for p in paths],
     }
-    views = None
     if detail:
         refined = detail_stage(model, params, recording, cam, person.measures, folder, log=log)
         if refined is not None:
-            params, views, quality["feinform"] = refined
+            params, quality["feinform"] = refined
             measures = measure_params(model, params)
     skin = None
     if texture:
-        skin = bake_skin(model, params, recording, cam, folder, views=views, log=log)
+        skin = bake_skin(model, params, recording, cam, folder, log=log)
     eyes = None
     if head_video:
         params, skin, eyes, quality["kopf"] = head_stage(model, params, Path(head_video), skin, folder,
@@ -282,15 +281,18 @@ def level_camera(frames: list, masks: list[np.ndarray], log: Log | None = None) 
     return LevelCamera(intr, level.leveled_intrinsics(tilt, intr, masks), tilt)
 
 
-DETAIL_FRAMES = 48  # Bilder für Feinform und Hautbild (dieselben, damit die Ansichten passen)
+DETAIL_FRAMES = 48  # Bilder für Feinform und Hautbild
 
 
 def detail_stage(model: BodyModel, params: BodyParams, recording: Recording, cam: LevelCamera,
                  measures: dict[str, float] | None = None, folder: Path | None = None,
                  max_frames: int = DETAIL_FRAMES, log: Log | None = None):
-    """Feinform aus den Umrissen vieler Bilder rundherum. Gibt (Parameter, Ansichten je Bild,
-    Kennzahlen) zurück oder None, wenn zu wenige Bilder brauchbar sind. Die Ansichten passen zu den
-    Bildern, die bake_skin mit derselben Bildzahl wählt."""
+    """Feinform aus den Umrissen vieler Bilder rundherum. Gibt (Parameter, Kennzahlen) zurück oder
+    None, wenn zu wenige Bilder brauchbar sind.
+
+    Die dabei mitgeführten Haltungen je Bild bleiben hier: Sie treffen den Umriss, legen aber das
+    Hautbild weniger deckungsgleich (Rumpf und Becken kippen je Bild ein paar Grad). bake_skin
+    richtet die Bilder deshalb auf der neuen Form noch einmal mit fit_views aus."""
     from .fit import fit_views
     from .refine import refine_shape
     from .video import select_for_texture
@@ -303,11 +305,11 @@ def detail_stage(model: BodyModel, params: BodyParams, recording: Recording, cam
     fit = cam.fit_frames(frames)
     log(f"Feinform: {len(frames)} Bilder rundherum werden genau ausgerichtet …")
     views = fit_views(model, params, fit, log=log)
-    params, views, report = refine_shape(model, params, fit, views, measures=measures, log=log)
+    params, _, report = refine_shape(model, params, fit, views, measures=measures, log=log)
     info = report.to_json()
     if folder is not None:
         (Path(folder) / "feinform.json").write_text(json.dumps(info, indent=1, ensure_ascii=False), "utf-8")
-    return params, views, info
+    return params, info
 
 
 def bake_skin(model: BodyModel, params: BodyParams, recording: Recording, cam: LevelCamera,

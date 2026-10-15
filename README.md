@@ -75,11 +75,12 @@ ausgerichtet. Dann verschiebt sich jeder Punkt des Netzes glatt entlang seiner N
 Randlinie des Modells in jedem Bild auf dem Umriss der Person liegt und nirgends darüber hinausragt;
 Lage und Haltung jedes Bildes werden dabei mit nachgeschärft. So kommen Schulter-, Arm-, Brust- und
 Rückenmuskeln, Bauch, Gesäß und Waden als echte Form ins Modell (beim Testvideo lagen die
-Modellränder vorher im Mittel 8,6 mm neben dem Umriss, danach 4,6 mm). Eingegebene Maßbandwerte
-bleiben dabei erhalten; Kopf, Hände und Füße bleiben unverändert. Grenze: Was von keiner Seite am
-Rand liegt (Rinne der Wirbelsäule, Linien zwischen den Bauchmuskeln), bleibt so glatt wie die
-Vorlage und ist nur als Schatten im Hautbild zu sehen. Ohne Feinform (schneller): Häkchen entfernen
-oder `--ohne-feinform`.
+Modellränder vorher im Mittel 8,6 mm neben dem Umriss, danach 4,7 mm). Eingegebene Maßbandwerte
+bleiben dabei erhalten; Kopf, Hände und Füße bleiben unverändert. Für das Hautbild werden die Bilder
+danach auf der neuen Form noch einmal ausgerichtet, damit Schrift und Tattoos nicht doppelt liegen.
+Grenze: Was von keiner Seite am Rand liegt (Rinne der Wirbelsäule, Linien zwischen den
+Bauchmuskeln), bleibt so glatt wie die Vorlage und ist nur als Schatten im Hautbild zu sehen. Ohne
+Feinform (schneller): Häkchen entfernen oder `--ohne-feinform`.
 
 **Hautbild:** Jedes Videobild wird einzeln ausgerichtet (Drehung, Lage, Haltung von Armen und
 Beinen), dann werden die Farben auf die Körperoberfläche übertragen. Ein zweiter Durchgang schiebt
