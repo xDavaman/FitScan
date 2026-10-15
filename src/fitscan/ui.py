@@ -72,7 +72,7 @@ def _path(f) -> Path | None:
     return Path(f if isinstance(f, str) else f.name)
 
 
-def run_scan(files, head, name, gender, age, height, weight, refine, texture, *optional):
+def run_scan(files, head, name, gender, age, height, weight, refine, texture, detail, *optional):
     from . import pipeline
 
     if not files:
@@ -87,7 +87,7 @@ def run_scan(files, head, name, gender, age, height, weight, refine, texture, *o
     source = paths[0] if len(paths) == 1 else paths
     for log, result in _stream(lambda log: pipeline.scan(source, person, name or "Ich", refine=bool(refine),
                                                          texture=bool(texture), head_video=_path(head),
-                                                         log=log)):
+                                                         detail=bool(detail), log=log)):
         if result is None:
             yield log, None, None, None, ""
         else:
@@ -227,6 +227,8 @@ def build():
                                          value=False)
                     texture = gr.Checkbox(label="Hautbild übernehmen (Hautfarbe, Tattoos, Kleidung; "
                                                 "dauert ohne Grafikkarte einige Minuten länger)", value=True)
+                    detail = gr.Checkbox(label="Feinform aus allen Blickwinkeln (Schultern, Arme, Brust, Rücken, "
+                                               "Waden als echte Form; einige Minuten länger)", value=True)
                     head = gr.File(label=HEAD_VIDEO_LABEL, file_count="single", file_types=["video"])
                     start = gr.Button("Scan starten", variant="primary")
                     glb_path = gr.State()
@@ -237,7 +239,7 @@ def build():
                     downloads = gr.File(label="Dateien", file_count="multiple")
                     log = gr.Textbox(label="Ablauf", lines=8)
             # Model3D zeigt Werte aus laufenden Generatoren nicht an, daher im Folgeschritt setzen
-            start.click(run_scan, [files, head, name, gender, age, height, weight, refine, texture, *optional],
+            start.click(run_scan, [files, head, name, gender, age, height, weight, refine, texture, detail, *optional],
                         [log, table, glb_path, downloads, report]).then(_show, glb_path, model3d)
         with gr.Tab("3. Nur aus Maßen"):
             with gr.Row():

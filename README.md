@@ -61,6 +61,7 @@ Jeder Scan landet in `daten/personen/<name>/scans/<datum>/`:
 | `koerper.obj` | nur das Netz (z. B. für 3D-Druck oder Bildhauerprogramme), mit `.mtl` und Hautbild |
 | `haut.jpg` | Hautbild aus dem Video (Hautton, Tattoos, Muttermale, Kleidung) auf Annys UV-Karte, 4096 × 4096 |
 | `ansichten.json` | Lage und Haltung des Körpers in jedem verwendeten Videobild |
+| `feinform.json` | Feinform: Abstand der Modellränder zum Umriss im Video vorher/nachher, Verschiebung je Körperbereich |
 | `kopf.json`, `kopfvergleich.jpg` | nur mit Kopfaufnahme: Gesichtsmaße, Passgenauigkeit, Foto und Modell nebeneinander |
 | `augen.jpg` | nur mit Kopfaufnahme: eigenes, feines Bild der Augäpfel (zweites Material „Augen“ in GLB, FBX, OBJ) |
 | `params.json`, `offsets.npy` | Körperparameter; daraus wird jeder Re-Scan weitergerechnet |
@@ -68,6 +69,17 @@ Jeder Scan landet in `daten/personen/<name>/scans/<datum>/`:
 
 Eigenschaften: echte Größe in Metern, Füße auf dem Boden, Y oben, geschlossenes Netz ohne Löcher,
 A-Pose als Ruhepose, symmetrisches Skelett, Formregler `weight_up/down` und `muscle_up/down`.
+
+**Feinform (Muskeln als Form):** Nach der groben Anpassung werden 48 Bilder rundherum genau
+ausgerichtet. Dann verschiebt sich jeder Punkt des Netzes glatt entlang seiner Normalen, bis die
+Randlinie des Modells in jedem Bild auf dem Umriss der Person liegt und nirgends darüber hinausragt;
+Lage und Haltung jedes Bildes werden dabei mit nachgeschärft. So kommen Schulter-, Arm-, Brust- und
+Rückenmuskeln, Bauch, Gesäß und Waden als echte Form ins Modell (beim Testvideo lagen die
+Modellränder vorher im Mittel 8,6 mm neben dem Umriss, danach 4,6 mm). Eingegebene Maßbandwerte
+bleiben dabei erhalten; Kopf, Hände und Füße bleiben unverändert. Grenze: Was von keiner Seite am
+Rand liegt (Rinne der Wirbelsäule, Linien zwischen den Bauchmuskeln), bleibt so glatt wie die
+Vorlage und ist nur als Schatten im Hautbild zu sehen. Ohne Feinform (schneller): Häkchen entfernen
+oder `--ohne-feinform`.
 
 **Hautbild:** Jedes Videobild wird einzeln ausgerichtet (Drehung, Lage, Haltung von Armen und
 Beinen), dann werden die Farben auf die Körperoberfläche übertragen. Ein zweiter Durchgang schiebt

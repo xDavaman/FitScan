@@ -15,6 +15,7 @@ from .body import BodyModel, BodyParams
 from .camera import Intrinsics
 from .export import PRESETS, cascadeur_check, export_body
 from .fit import FitFrame, FrameFitResult, Person, fit_to_frames, fit_to_measurements
+from .measure import measure_params
 from .quality import ScanReport
 from .segment import refine_mask
 from .store import ScanRecord, Store
@@ -152,11 +153,14 @@ def body_from_measurements(person: Person, name: str, store: Store | None = None
 
 def scan(source: Path | list[Path], person: Person, name: str, store: Store | None = None,
          presets: tuple[str, ...] = PRESETS, device: str | None = None, fps: float = 4.0,
-         refine: bool = False, texture: bool = True, head_video: Path | None = None,
+         refine: bool = False, texture: bool = True, head_video: Path | None = None, detail: bool = True,
          log: Log | None = None) -> ScanResult:
     """Video oder Fotos -> angepasster, riggbarer Körper als GLB/OBJ, gespeichert beim Namen.
 
     texture: Hautbild (Farben, Tattoos, Muttermale) aus den Bildern aufs Modell übertragen.
+
+    detail: Feinform aus allen Blickwinkeln: Schultern, Arme, Brust, Rücken, Bauch, Gesäß und Waden
+    folgen in jedem Bild dem Umriss (Muskeln als Form, nicht nur als Schatten im Hautbild).
 
     head_video: zusätzliche Nahaufnahme des Kopfes (Kopf langsam in alle Richtungen drehen). Daraus
     kommen Gesichtsform, Schädel, Ohren und das scharfe Hautbild von Gesicht und Augen.
@@ -203,14 +207,20 @@ def scan(source: Path | list[Path], person: Person, name: str, store: Store | No
     params, measures, frame_results = fit_to_frames(model, person, fit_frames, init=init, log=log)
 
     folder = store.new_scan_folder(rec.id)
-    skin = None
-    if texture:
-        skin = bake_skin(model, params, recording, cam, folder, log=log)
     quality = {
         "bericht": report.to_json(),
         "bilder": [r.to_json() for r in frame_results],
         "quelle": [str(p) for p in paths],
     }
+    views = None
+    if detail:
+        refined = detail_stage(model, params, recording, cam, person.measures, folder, log=log)
+        if refined is not None:
+            params, views, quality["feinform"] = refined
+            measures = measure_params(model, params)
+    skin = None
+    if texture:
+        skin = bake_skin(model, params, recording, cam, folder, views=views, log=log)
     eyes = None
     if head_video:
         params, skin, eyes, quality["kopf"] = head_stage(model, params, Path(head_video), skin, folder,
@@ -272,8 +282,36 @@ def level_camera(frames: list, masks: list[np.ndarray], log: Log | None = None) 
     return LevelCamera(intr, level.leveled_intrinsics(tilt, intr, masks), tilt)
 
 
+DETAIL_FRAMES = 48  # Bilder für Feinform und Hautbild (dieselben, damit die Ansichten passen)
+
+
+def detail_stage(model: BodyModel, params: BodyParams, recording: Recording, cam: LevelCamera,
+                 measures: dict[str, float] | None = None, folder: Path | None = None,
+                 max_frames: int = DETAIL_FRAMES, log: Log | None = None):
+    """Feinform aus den Umrissen vieler Bilder rundherum. Gibt (Parameter, Ansichten je Bild,
+    Kennzahlen) zurück oder None, wenn zu wenige Bilder brauchbar sind. Die Ansichten passen zu den
+    Bildern, die bake_skin mit derselben Bildzahl wählt."""
+    from .fit import fit_views
+    from .refine import refine_shape
+    from .video import select_for_texture
+
+    log = log or _noop
+    frames = select_for_texture(recording.frames, max_frames)
+    if len(frames) < 12:
+        log("Zu wenige Blickwinkel für die Feinform, sie wird übersprungen.")
+        return None
+    fit = cam.fit_frames(frames)
+    log(f"Feinform: {len(frames)} Bilder rundherum werden genau ausgerichtet …")
+    views = fit_views(model, params, fit, log=log)
+    params, views, report = refine_shape(model, params, fit, views, measures=measures, log=log)
+    info = report.to_json()
+    if folder is not None:
+        (Path(folder) / "feinform.json").write_text(json.dumps(info, indent=1, ensure_ascii=False), "utf-8")
+    return params, views, info
+
+
 def bake_skin(model: BodyModel, params: BodyParams, recording: Recording, cam: LevelCamera,
-              folder: Path | None = None, max_frames: int = 48, size: int | None = None,
+              folder: Path | None = None, max_frames: int = DETAIL_FRAMES, size: int | None = None,
               views: list | None = None, fine_align: bool = True, white_balance: bool = True,
               log: Log | None = None) -> np.ndarray | None:
     """Hautbild aus den Bildern einer Aufnahme. Speichert haut.jpg und ansichten.json im Ordner.
@@ -298,6 +336,8 @@ def bake_skin(model: BodyModel, params: BodyParams, recording: Recording, cam: L
 
     log = log or _noop
     frames = select_for_texture(recording.frames, max_frames)
+    if views is not None and len(views) != len(frames):
+        views = None  # andere Bildauswahl: neu ausrichten
     if len(frames) < 4:
         log("Zu wenige brauchbare Bilder für das Hautbild, Modell bleibt einfarbig.")
         return None
