@@ -121,12 +121,12 @@ def glb_to_anny(gltf: dict, blob: bytearray, model) -> tuple[np.ndarray, np.ndar
 def add_face_controls(glb: Path, target: Path, model=None) -> list[str]:
     """Schreibt eine Kopie des GLB mit den Gesichtsreglern. Gibt deren Namen zurück."""
     from .body import BodyModel
-    from .face_rig import morphs_for_model
+    from .face_rig import face_morphs
 
     model = model or BodyModel.get()
     gltf, blob = read_glb(glb)
     index, anny = glb_to_anny(gltf, blob, model)
-    morphs = morphs_for_model(model, anny)
+    morphs = face_morphs(model, anny)
     known = set(gltf["meshes"][0].get("extras", {}).get("targetNames", []))
     deltas = {}
     for name, d in morphs.items():

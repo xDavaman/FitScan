@@ -678,7 +678,14 @@ def face_demo(arm_obj, mesh, out_dir: str, render: bool) -> dict:
 
 
 FACE_LABELS = {
-    "jawOpen": "Mund auf (Kiefer)", "mouthSmileLeft": "Lächeln links", "mouthSmileRight": "Lächeln rechts",
+    "jawOpen": "Mund auf (Kiefer)", "jawForward": "Kiefer vor", "jawLeft": "Kiefer nach links",
+    "jawRight": "Kiefer nach rechts", "mouthClose": "Lippen zu bei offenem Kiefer",
+    "mouthDimpleLeft": "Grübchen links", "mouthDimpleRight": "Grübchen rechts",
+    "mouthLowerDownLeft": "Unterlippe runter links", "mouthLowerDownRight": "Unterlippe runter rechts",
+    "mouthUpperUpLeft": "Oberlippe hoch links", "mouthUpperUpRight": "Oberlippe hoch rechts",
+    "mouthRollLower": "Unterlippe einrollen", "mouthRollUpper": "Oberlippe einrollen",
+    "mouthShrugLower": "Unterlippe vorschieben", "mouthShrugUpper": "Oberlippe vorschieben",
+    "tongueOut": "Zunge raus", "mouthSmileLeft": "Lächeln links", "mouthSmileRight": "Lächeln rechts",
     "mouthFrownLeft": "Mundwinkel runter links", "mouthFrownRight": "Mundwinkel runter rechts",
     "mouthPucker": "Kussmund", "mouthFunnel": "Trichtermund", "mouthLeft": "Mund nach links",
     "mouthRight": "Mund nach rechts", "mouthPressLeft": "Lippen pressen links",
