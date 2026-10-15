@@ -80,7 +80,7 @@ def build_scene(n_cylinders: int, fps: int, frames: int):
     world.node_tree.nodes["Background"].inputs["Strength"].default_value = 0.6
     sc.world = world
     cam = bpy.data.objects.new("Kamera", bpy.data.cameras.new("Kamera"))
-    cam.data.lens = 40
+    cam.data.lens = 35
     sc.collection.objects.link(cam)
     sc.camera = cam
     sc.render.engine = "BLENDER_EEVEE"
@@ -127,7 +127,7 @@ def main(argv):
     cylinders, cam = build_scene(cyl.shape[1], fps, len(verts))
     caption, caption_at = add_caption(cam, list(d["captions"]), fps)
     target = verts.mean(axis=(0, 1))
-    target[2] = 0.85
+    target[2] = float(verts[..., 2].mean()) + 0.12
     cam_offset = np.array(d["camera"]) if "camera" in d else np.array([2.6, -3.0, 0.6])
 
     def update(scene, *_):
