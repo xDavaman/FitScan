@@ -82,7 +82,8 @@ def test_glb_roundtrip_adds_controls(model, tmp_path):
     gltf, blob = read_glb(src)
     index, anny = glb_to_anny(gltf, blob, model)
     rest = model.rest_numpy(BodyParams())["vertices"]
-    assert np.allclose(anny - anny[:, 2].min(), rest - rest[:, 2].min(), atol=1e-5)
+    floor = np.array([0.0, 0.0, 1.0])
+    assert np.allclose(anny - anny[:, 2].min() * floor, rest - rest[:, 2].min() * floor, atol=1e-5)
     names = add_face_controls(src, tmp_path / "mimik.glb", model=model)
     out, _ = read_glb(tmp_path / "mimik.glb")
     targets = out["meshes"][0]["extras"]["targetNames"]

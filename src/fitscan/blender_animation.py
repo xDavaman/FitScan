@@ -634,7 +634,7 @@ def face_demo(arm_obj, mesh, out_dir: str, render: bool) -> dict:
     """Jeder Gesichtsregler einzeln, Körper in Ruhe: eigene Aktion und Nahaufnahme-Video."""
     shape_keys = mesh.data.shape_keys
     names = [k.name for k in shape_keys.key_blocks[1:] if not k.name.startswith(("weight_", "muscle_"))]
-    step = 0.8
+    step = 0.6
     keys = [(0.0, {})]
     captions = []
     for i, n in enumerate(names):
@@ -667,7 +667,7 @@ def face_demo(arm_obj, mesh, out_dir: str, render: bool) -> dict:
             o.hide_render = True
     add_captions(cam, captions, size=0.022, pos=(-0.17, -0.08, -0.5))
     light = bpy.data.objects.new("Gesichtslicht", bpy.data.lights.new("Gesichtslicht", "AREA"))
-    light.data.energy = 60
+    light.data.energy = 18
     light.data.size = 0.8
     light.location = cam.location + Vector((-0.5, -0.2, 0.4))
     light.rotation_euler = (head - light.location).to_track_quat("-Z", "Y").to_euler()
@@ -708,8 +708,26 @@ FACE_LABELS = {
 # --------------------------------------------------------------------------- Export
 
 
-def export_all(arm_obj, mesh, out_dir: str, stem: str) -> dict:
+def save_images(out_dir: str, stem: str) -> dict:
+    """Haut- und Augenbild als eigene Dateien: Cascadeur liest Bilder nicht aus der FBX, und Blenders
+    FBX-Export bettet eingepackte Bilder ohne Dateipfad nur einmal ein (das Augenbild fehlte)."""
     files = {}
+    for img in bpy.data.images:
+        if img.size[0] == 0:
+            continue
+        if img.packed_file is None:
+            continue
+        ext = ".png" if img.packed_file.data[:4] == b"\x89PNG" else ".jpg"
+        path = os.path.join(out_dir, f"{stem}_{img.name.lower()}{ext}")
+        with open(path, "wb") as f:
+            f.write(img.packed_file.data)  # Originalbild, ohne erneute Kompression
+        img.filepath = path
+        files[img.name.lower()] = path
+    return files
+
+
+def export_all(arm_obj, mesh, out_dir: str, stem: str) -> dict:
+    files = save_images(out_dir, stem)
     bpy.ops.object.select_all(action="DESELECT")
     arm_obj.select_set(True)
     mesh.select_set(True)
