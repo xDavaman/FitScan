@@ -160,9 +160,11 @@ def test_animate_glb_matches_figure(model, tmp_path):
         target = verts[f] @ np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0.0]]).T  # Anny -> glTF
         d = np.linalg.norm(v - target, axis=1)
         assert d.mean() < 1e-3 and d.max() < 0.02, (f, d.mean(), d.max())
-    # gleicher Körper, gleiche Bewegung: wie Annys eigenes Abspielen (Boden, Hüfthöhe)
+    # gleicher Körper, gleiche Bewegung: wie Annys eigenes Abspielen; nur die Höhe darf um den
+    # erneuten Bodenausgleich (Fußsohlen mit Kontakt auf z = 0) abweichen
     pb = M.play(model, SLIM, mo)
-    assert np.abs(verts - pb.vertices).max() < 0.01
+    assert np.abs(verts[..., :2] - pb.vertices[..., :2]).max() < 1e-3
+    assert np.abs(verts[..., 2] - pb.vertices[..., 2]).max() < 0.03
 
 
 def test_mannequin_has_smooth_head_and_exports(model, tmp_path):
