@@ -268,3 +268,59 @@ def summarize(findings_per_frame: list[list[Finding]], fps: float = 30.0) -> lis
         else:
             lines.append(f"{kind}: {where}, bis {worst:.0f} Dreiecke ({when})")
     return lines
+
+
+# --------------------------------------------------------------------------- weiche Haut
+
+
+class Softener:
+    """Weiches Gewebe gibt nach: Wo eine weiche Stelle (Bauch, Brust, Gesäß, Oberschenkel-Innenseite)
+    in einen anderen Körperteil gedrückt wird, schiebt Softener sie auf dessen Oberfläche zurück und
+    verteilt die Verschiebung weich auf die Nachbarschaft, statt dass Haut ineinander steckt."""
+
+    def __init__(self, checker: Checker, pairs: list[tuple[str, str]], spread: int = 6):
+        from scipy.sparse import coo_matrix
+
+        self.checker = checker
+        self.pairs = pairs
+        self.spread = spread
+        faces = checker.faces
+        n = len(checker.vertex_part)
+        rows = np.concatenate([faces[:, [0, 1, 2]].ravel(), faces[:, [1, 2, 0]].ravel()])
+        cols = np.concatenate([faces[:, [1, 2, 0]].ravel(), faces[:, [0, 1, 2]].ravel()])
+        adj = coo_matrix((np.ones(len(rows)), (rows, cols)), shape=(n, n)).tocsr()
+        adj.data[:] = 1.0
+        deg = np.asarray(adj.sum(1)).ravel()
+        self.average = adj.multiply(1.0 / np.maximum(deg, 1)[:, None]).tocsr()
+
+    def __call__(self, vertices: np.ndarray, margin: float = 0.002) -> tuple[np.ndarray, float]:
+        """Gibt die korrigierten Punkte und die größte Verschiebung (Meter) zurück."""
+        from scipy.spatial import cKDTree
+
+        part = self.checker.vertex_part
+        normals = _vertex_normals(vertices, self.checker.faces)
+        push = np.zeros_like(vertices)
+        for soft, hard in self.pairs:
+            mine = np.flatnonzero(part == soft)
+            theirs = np.flatnonzero(part == hard)
+            if len(mine) == 0 or len(theirs) == 0:
+                continue
+            dist, k = cKDTree(vertices[theirs]).query(vertices[mine], distance_upper_bound=0.05)
+            ok = dist < np.inf
+            mine, k = mine[ok], theirs[k[ok]]
+            signed = np.einsum("ij,ij->i", vertices[mine] - vertices[k], normals[k])
+            inside = signed < margin
+            # nur echte Durchdringung: Punkt liegt hinter der fremden Haut und blickt ihr entgegen
+            inside &= np.einsum("ij,ij->i", normals[mine], normals[k]) < 0.3
+            d = (margin - signed[inside])[:, None] * normals[k[inside]]
+            cur = push[mine[inside]]
+            better = np.linalg.norm(d, axis=1) > np.linalg.norm(cur, axis=1)
+            push[mine[inside][better]] = d[better]
+        if not push.any():
+            return vertices, 0.0
+        fixed = np.linalg.norm(push, axis=1) > 0
+        smooth = push.copy()
+        for _ in range(self.spread):
+            smooth = self.average @ smooth
+            smooth[fixed] = push[fixed]
+        return vertices + smooth, float(np.linalg.norm(push, axis=1).max())

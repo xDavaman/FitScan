@@ -128,6 +128,10 @@ class Hand:
                 if wb > 0 and int(b) in cols:
                     self.weights[k, cols[int(b)]] += wb / total
         self.owner = self.weights.argmax(1)
+        local = np.full(model.num_vertices, -1)
+        local[self.ids] = np.arange(len(self.ids))
+        f = local[model.faces]
+        self.faces = f[(f >= 0).all(1)]
 
         # Endglieder haben keinen Kindknochen: Spitze = am weitesten außen liegender Hautpunkt
         self.tip = {}
@@ -147,6 +151,14 @@ class Hand:
         normal = np.cross(self.along, self.across)
         probe = (self.tip["finger2"] + self.tip["finger3"] + self.tip[THUMB]) / 3 - knuckles.mean(0)
         self.palm = normal if probe @ normal > 0 else -normal
+
+    def normals(self, points: np.ndarray) -> np.ndarray:
+        tri = points[self.faces]
+        n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+        out = np.zeros_like(points)
+        for k in range(3):
+            np.add.at(out, self.faces[:, k], n)
+        return out / np.maximum(np.linalg.norm(out, axis=1, keepdims=True), 1e-12)
 
     def mask(self, bones: list[str]) -> np.ndarray:
         return np.isin(self.owner, [self.names.index(b) for b in bones])
@@ -216,10 +228,15 @@ def _world(rots: list[np.ndarray]) -> list[np.ndarray]:
 
 
 def _close(hand: Hand, names, hinges, centre, axis, radius, others, limits=MAX_BEND, ratio=RATIO,
-           pre: np.ndarray | None = None):
+           pre: np.ndarray | None = None, obstacle: tuple | None = None):
     """Gelenke einer Kette gleichzeitig schließen, jedes Glied hält bei Berührung an.
-    pre: feste Vordrehung des ersten Gelenks (Daumen zum Gegengreifen eingedreht)."""
+    pre: feste Vordrehung des ersten Gelenks (Daumen zum Gegengreifen eingedreht).
+    obstacle: (Punkte, Normalen) einer Haut, in die die Kette nicht eindringen darf (Finger für den Daumen)."""
     masks = [hand.mask([n]) for n in names]
+    if obstacle is not None:
+        from scipy.spatial import cKDTree
+
+        tree = cKDTree(obstacle[0])
     pre = np.eye(3) if pre is None else pre
     bend = [0.0] * 3
     frozen = [False] * 3
@@ -232,7 +249,12 @@ def _close(hand: Hand, names, hinges, centre, axis, radius, others, limits=MAX_B
     def gaps(angles):
         world = dict(others)
         world.update(zip(names, _world(rots(angles)), strict=True))
-        d = axis_distance(hand.skin(world), centre, axis) - radius
+        pts = hand.skin(world)
+        d = axis_distance(pts, centre, axis) - radius
+        if obstacle is not None:
+            dist, k = tree.query(pts)
+            signed = np.einsum("ij,ij->i", pts - obstacle[0][k], obstacle[1][k]) + 0.002
+            d = np.minimum(d, np.where(dist < 0.015, signed, 1.0))
         return [float(d[m].min()) if m.any() else 1.0 for m in masks]
 
     current = gaps(bend)
@@ -287,6 +309,9 @@ def solve_grip(hand: Hand, radius: float, depth: float = 0.2) -> Grip:
 
     # Daumen: das Grundgelenk dreht ihn in die Ebene quer zur Stange, dann schließen sich alle drei
     # Gelenke um die Stange (Drehachse = Stange), bis er anliegt
+    closed = hand.skin(world)
+    fingers = hand.mask([f"{f}-{k}.{side}" for f in FINGERS for k in (1, 2, 3)])
+    obstacle = (closed[fingers], hand.normals(closed)[fingers])
     names, pts = hand.chain(THUMB)
     d = pts[3] - pts[0]
     full = rotation_between(d, d - axis * (d @ axis))
@@ -303,7 +328,8 @@ def solve_grip(hand: Hand, radius: float, depth: float = 0.2) -> Grip:
         for opening in range(0, 91, 10):
             pre = rotation(-hinges[0], opening) @ clamp_rotation(
                 rotation_between(d, (1 - turn) * d + turn * (full @ d)), THUMB_TURN)
-            bend, rots, g = _close(hand, names, hinges, centre, axis, radius, world, THUMB_MAX, THUMB_RATIO, pre)
+            bend, rots, g = _close(hand, names, hinges, centre, axis, radius, world, THUMB_MAX, THUMB_RATIO, pre,
+                                   obstacle)
             if min(g) < -CONTACT:
                 continue
             w = _world(rots)

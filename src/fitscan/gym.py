@@ -222,47 +222,67 @@ def _finish(fig: P.Figure, ex: Exercise, frames: list[dict], root: np.ndarray) -
     return ex
 
 
-def deadlift_setup(fig: P.Figure, grips: dict, stance: float = 6.0) -> tuple[np.ndarray, dict]:
+def _sole_centre(fig: P.Figure, v: np.ndarray) -> np.ndarray:
+    sole = fig.model.dominant_bone_mask(lambda n: n.startswith(("foot", "toe")))
+    z = v[sole, 2]
+    return v[sole][z < z.min() + 0.02].mean(0)
+
+
+def deadlift_setup(fig: P.Figure, grips: dict, stance: float = 4.0, width: float = 28.0,
+                   sumo: bool = False) -> tuple[np.ndarray, dict]:
     """Startposition beim Kreuzheben suchen: Hantel auf dem Boden (Stangenmitte auf Scheibenhöhe),
-    Stange über dem Mittelfuß, Schienbein an der Stange, gerader Rücken, Arme senkrecht.
+    Stange dort, wo sie im Stehen gut 1 cm vor dem Schienbein liegt, Schienbein an der Stange,
+    Hüfte nicht zu weit geschlossen, Hände außerhalb der Knie, Arme senkrecht.
     Gibt (Rumpfneigung, Oberschenkelwinkel, Schienbeinwinkel) und die Haltung zurück."""
     from scipy.optimize import minimize
 
     model = fig.model
-    sole = model.dominant_bone_mask(lambda n: n.startswith(("foot", "toe")))
     legs = model.dominant_bone_mask(lambda n: n.startswith(("lowerleg", "upperleg")))
     palms = {s: np.array([0, 1.0, 0]) for s in P.SIDES}
+    upright = fig.pose([fig.poser.rotations(standing(stance))])["vertices"][0]
+    upright = upright - [0, 0, upright[:, 2].min()]
+    band = legs & (np.abs(upright[:, 2] - PLATE_RADIUS) < 0.03)
+    bar_y = upright[band, 1].min() - BAR_RADIUS - 0.012 - _sole_centre(fig, upright)[1]
+    knee, wrist = (model.bone(f"{n}.L") for n in ("lowerleg01", "wrist"))
 
     def evaluate(x):
-        frames, wrist = hold(fig, [fig.poser.rotations(deadlift_pose(*x, stance=stance))], grips, palms)
+        frames, wrist_rest = hold(fig, [fig.poser.rotations(deadlift_pose(*x, stance=stance, width=width))],
+                                  grips, palms)
         out = fig.pose(frames)
         v = out["vertices"][0]
         bar = bar_frames(fig, out["poses"], grips)[0]
         zmin = v[:, 2].min()
-        foot = v[sole]
-        mid = foot[foot[:, 2] < zmin + 0.02].mean(0)
         cyl = contact.Cylinder("Stange", bar[:3, 3], bar[:3, 0], BAR_RADIUS, 0.5)
         pen = max(0.0, cyl.depth(v[legs]).max() + 0.003)
-        gap = np.linalg.norm((v[legs] - bar[:3, 3])[:, 1:], axis=1).min() - BAR_RADIUS
-        return bar[2, 3] - zmin, bar[1, 3] - mid[1], pen, gap, wrist[0]
+        outside = out["poses"][0, wrist, 0, 3] - out["poses"][0, knee, 0, 3]
+        if sumo:  # Hände zwischen den Knien
+            outside = -outside
+        return (bar[2, 3] - zmin, bar[1, 3] - _sole_centre(fig, v)[1] - bar_y, pen, outside, wrist_rest[0])
 
     def cost(x):
-        z, dy, pen, gap, wrist = evaluate(x)
-        return (100 * (z - PLATE_RADIUS) ** 2 + 100 * dy**2 + 1000 * pen**2 + 10 * max(gap - 0.03, 0) ** 2
-                + 1e-4 * ((x[0] - 50) ** 2 + (x[2] - 15) ** 2) + 1e-3 * max(wrist - WRIST_LIMIT, 0) ** 2
-                + 1e-2 * (max(40 - x[0], 0) ** 2 + max(x[0] - 62, 0) ** 2 + max(x[1] - 80, 0) ** 2
-                          + max(5 - x[2], 0) ** 2))
+        z, dy, pen, outside, wrist_rest = evaluate(x)
+        hip = 180 - x[0] - x[1]
+        return (100 * (z - PLATE_RADIUS) ** 2 + 100 * dy**2 + 1000 * pen**2 + 100 * max(0.07 - outside, 0) ** 2
+                + 1e-4 * ((x[0] - 55) ** 2 + (x[2] - 12) ** 2) + 1e-3 * max(wrist_rest - WRIST_LIMIT, 0) ** 2
+                + 1e-2 * (max(40 - x[0], 0) ** 2 + max(x[0] - 68, 0) ** 2 + max(65 - hip, 0) ** 2
+                          + max(3 - x[2], 0) ** 2))
 
-    best = minimize(cost, [60, 70, 12], method="Nelder-Mead", options=dict(maxiter=150, xatol=0.5, fatol=1e-7))
-    return best.x, deadlift_pose(*best.x, stance=stance)
+    best = minimize(cost, [58, 55, 10], method="Nelder-Mead", options=dict(maxiter=200, xatol=0.3, fatol=1e-8))
+    return best.x, deadlift_pose(*best.x, stance=stance, width=width)
 
 
-def deadlift_pose(torso: float, thigh: float, shin: float, stance: float = 6.0, arms_fwd: float = 0.0) -> dict:
+def standing(stance: float = 4.0) -> dict:
+    return P.pose(None, legs=dict(hip=2, knee=3, out=stance, turn=-8))
+
+
+def deadlift_pose(torso: float, thigh: float, shin: float, stance: float = 4.0, width: float = 28.0,
+                  arms_fwd: float = 0.0) -> dict:
     """Haltung beim Kreuzheben aus drei Winkeln gegen die Senkrechte: Rumpf nach vorn, Oberschenkel
-    nach vorn, Schienbein nach vorn. Die Arme hängen senkrecht, der Blick geht schräg nach vorn."""
+    nach vorn, Schienbein nach vorn. Die Arme hängen senkrecht (width: Griffbreite als Winkel aus der
+    A-Pose), der Blick geht schräg nach vorn."""
     return P.pose(None, body=dict(pitch=torso),
                   legs=dict(hip=torso + thigh, knee=thigh + shin, foot=-shin, out=stance, turn=-8),
-                  arms=dict(down=34, fwd=torso + arms_fwd, elbow=0), spine=dict(neck=-torso * 0.5),
+                  arms=dict(down=width, fwd=torso + arms_fwd, elbow=0), spine=dict(neck=-torso * 0.5),
                   shoulders=dict(up=-5))
 
 
@@ -271,8 +291,8 @@ def deadlift(fig: P.Figure, reps: int = 2) -> Exercise:
     grips = _grips(fig, BAR_RADIUS)
     palms = {s: np.array([0, 1.0, 0]) for s in P.SIDES}
     setup_x, setup = deadlift_setup(fig, grips)
-    top = deadlift_pose(-4, 0, 2, arms_fwd=8)  # aufrecht, Schultern zurück, Arme vor den Oberschenkeln
-    stand = P.pose(None, legs=dict(hip=2, knee=3, out=6, turn=-8))
+    top = deadlift_pose(-3, 0, 2, arms_fwd=14)  # aufrecht, Schultern zurück, Arme vor den Oberschenkeln
+    stand = standing()
     reach = deadlift_pose(*setup_x)
     keys = [(0.0, stand), (0.4, stand)]
     t = 1.6
