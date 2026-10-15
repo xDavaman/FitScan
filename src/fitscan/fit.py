@@ -244,6 +244,11 @@ class FitFrame:
 class FrameFitResult:
     yaw_deg: float
     iou: float
+    # Bild zur Kontrolle: grün = passt, rot = nur im Video (Modell zu schmal), blau = nur im Modell
+    overlay: np.ndarray | None = dataclasses.field(default=None, repr=False, compare=False)
+
+    def to_json(self) -> dict:
+        return {"yaw_deg": self.yaw_deg, "iou": self.iou}
 
 
 def _prepare_frame(frame: FitFrame, device) -> dict:
@@ -502,8 +507,127 @@ def fit_to_frames(
                                prep["intr"]) > 0
         inter = (rendered & prep["mask"]).sum()
         union = (rendered | prep["mask"]).sum()
-        results.append(FrameFitResult(math.degrees(float(yaws[i].detach())) % 360, float(inter / max(union, 1))))
+        overlay = np.full((*rendered.shape, 3), 245, np.uint8)
+        overlay[rendered & prep["mask"]] = (110, 180, 110)
+        overlay[prep["mask"] & ~rendered] = (220, 60, 60)
+        overlay[rendered & ~prep["mask"]] = (60, 100, 230)
+        results.append(FrameFitResult(math.degrees(float(yaws[i].detach())) % 360, float(inter / max(union, 1)),
+                                      overlay))
     return params, measure_params(model, params), results
+
+
+# --------------------------------------------------------------------------------------
+# Ansichten fürs Hautbild: Form steht fest, jedes Bild bekommt eigene Lage und Haltung
+# --------------------------------------------------------------------------------------
+
+# Beim Drehen auf der Stelle bewegen sich Beine und Arme ein wenig; diese Gelenke darf jedes Bild
+# eigens einstellen, damit Farben aus verschiedenen Bildern an derselben Hautstelle landen.
+VIEW_BONES = [*POSE_BONES, "lowerleg01.L", "lowerleg01.R", "root"]
+VIEW_POSE_REG = 0.02  # Abweichung eines Bildes von der gemeinsamen Haltung (gegen Ausreißer)
+
+
+@dataclasses.dataclass
+class View:
+    """So zeigt ein Bild den Körper: Drehung, Verschiebung und Haltung in diesem Moment."""
+
+    yaw: float  # Radiant
+    trans: np.ndarray  # (3,) Meter, Kamerakoordinaten
+    pose: np.ndarray  # (len(VIEW_BONES), 3) Achse mal Winkel
+    iou: float = 0.0
+
+    def to_json(self) -> dict:
+        return {"yaw": self.yaw, "trans": [float(x) for x in self.trans],
+                "pose": np.round(self.pose, 5).tolist(), "iou": self.iou}
+
+    @classmethod
+    def from_json(cls, data: dict) -> View:
+        return cls(float(data["yaw"]), np.array(data["trans"], np.float32),
+                   np.array(data["pose"], np.float32), float(data.get("iou", 0.0)))
+
+
+def view_pose_matrices(model: BodyModel, pose_aa: torch.Tensor) -> torch.Tensor:
+    """(B, len(VIEW_BONES), 3) -> (B, J, 4, 4) lokale Gelenkdrehungen."""
+    b = pose_aa.shape[0]
+    idx = torch.tensor([model.bone(n) for n in VIEW_BONES], device=pose_aa.device)
+    pose = torch.eye(4, device=pose_aa.device)[None, None].repeat(b, len(model.bone_labels), 1, 1)
+    return pose.index_put((torch.arange(b, device=pose_aa.device)[:, None], idx[None]),
+                          axis_angle_to_matrix(pose_aa))
+
+
+def _rest_tensors(model: BodyModel, params: BodyParams) -> dict[str, torch.Tensor]:
+    offsets = None
+    if params.offsets is not None:
+        offsets = torch.as_tensor(params.offsets, dtype=torch.float32, device=model.device)
+    return model.rest(model.phenotype_tensor(params), model.local_tensor(params), offsets, params.scale)
+
+
+@torch.no_grad()
+def view_vertices(model: BodyModel, params: BodyParams, view: View) -> np.ndarray:
+    """Körper (Anny-Koordinaten) in der Haltung dieses Bildes."""
+    rest = _rest_tensors(model, params)
+    pose = view_pose_matrices(model, torch.as_tensor(view.pose[None], dtype=torch.float32, device=model.device))
+    return model.posed(rest, pose, params.scale)["vertices"][0].cpu().numpy()
+
+
+def fit_views(model: BodyModel, params: BodyParams, frames: list[FitFrame],
+              steps: tuple[int, int] = (40, 80), chunk: int = 8, log: Log | None = None) -> list[View]:
+    """Drehung, Verschiebung und Haltung je Bild bei fester Körperform (für das Hautbild).
+
+    Zuerst eine gemeinsame Haltung für alle Bilder, dann darf jedes Bild davon etwas abweichen
+    (Schritte beim Drehen, Arme)."""
+    if not frames:
+        return []
+    device = model.device
+    with torch.no_grad():
+        rest = _rest_tensors(model, params)
+        start = model.posed(rest, None, params.scale)
+        verts0, heads0 = start["vertices"][0], start["bone_heads"][0]
+    preps = [_prepare_frame(f, device) for f in frames]
+    k = len(preps)
+    yaw_init, trans_init = [], []
+    for i, (prep, frame) in enumerate(zip(preps, frames, strict=True)):
+        y, t = _initial_view(verts0, heads0, prep, model, frame.yaw_init, refine_steps=15)
+        yaw_init.append(y)
+        trans_init.append(t)
+        if log and (i % 10 == 0 or i == k - 1):
+            log(f"Ansicht {i + 1}/{k} grob ausgerichtet")
+    yaws = torch.nn.Parameter(torch.tensor(yaw_init, dtype=torch.float32, device=device))
+    trans = torch.nn.Parameter(torch.tensor(trans_init, dtype=torch.float32, device=device))
+    shared = torch.nn.Parameter(torch.zeros(len(VIEW_BONES), 3, device=device))
+    delta = torch.nn.Parameter(torch.zeros(k, len(VIEW_BONES), 3, device=device))
+
+    def stage(name: str, n_steps: int, params_: list, kp_w: float) -> None:
+        opt = torch.optim.Adam(params_, lr=0.01)
+        for step in range(n_steps):
+            opt.zero_grad()
+            total = 0.0
+            for lo in range(0, k, chunk):
+                ids = list(range(lo, min(k, lo + chunk)))
+                pose = view_pose_matrices(model, shared[None] + delta[ids])
+                posed = model.posed(rest, pose, params.scale)
+                loss = sum(_frame_loss(posed["vertices"][b], posed["bone_heads"][b], yaws[i], trans[i],
+                                       preps[i], model, kp_w) for b, i in enumerate(ids))
+                loss = SILHOUETTE_WEIGHT * loss / k + VIEW_POSE_REG * (delta[ids] ** 2).sum() / k
+                loss.backward()
+                total += loss.item()
+            (0.01 * (shared ** 2).sum()).backward()
+            opt.step()
+            if log and step % 40 == 0:
+                log(f"{name}: Schritt {step}/{n_steps}, Fehler {total:.5f}")
+
+    stage("Ansichten, gemeinsame Haltung", steps[0], [yaws, trans, shared], 1.0)
+    stage("Ansichten, Haltung je Bild", steps[1], [yaws, trans, shared, delta], KEYPOINT_WEIGHT_SHAPE)
+
+    views = []
+    with torch.no_grad():
+        poses = (shared[None] + delta).cpu().numpy()
+        for i, prep in enumerate(preps):
+            view = View(float(yaws[i]), trans[i].cpu().numpy().astype(np.float32), poses[i].astype(np.float32))
+            verts = view_vertices(model, params, view)
+            rendered = render_mask(verts, model.faces, view.yaw, view.trans, prep["intr"]) > 0
+            view.iou = float((rendered & prep["mask"]).sum() / max((rendered | prep["mask"]).sum(), 1))
+            views.append(view)
+    return views
 
 
 def _soft_gate(model: BodyModel, edges: np.ndarray, rings: int = 8) -> np.ndarray:
@@ -529,6 +653,8 @@ def _vertex_normals(verts: torch.Tensor, faces: torch.Tensor) -> torch.Tensor:
 def repair_offsets(model: BodyModel, params: BodyParams, rounds: int = 12) -> tuple[BodyParams, int]:
     """Nimmt die Feinform dort zurück, wo sie Dreiecke umklappt oder Flächen ineinander schiebt.
     Gibt die Zahl der betroffenen Punkte zurück."""
+    import trimesh
+
     from .mesh_check import self_intersections
 
     if params.offsets is None:
@@ -542,7 +668,16 @@ def repair_offsets(model: BodyModel, params: BodyParams, rounds: int = 12) -> tu
         return np.cross(v[faces[:, 1]] - v[faces[:, 0]], v[faces[:, 2]] - v[faces[:, 0]])
 
     ref = fnormals(template)
-    base = self_intersections(template, faces)
+    # Augäpfel und Mundraum sind eigene Teile und stecken bei Anny bewusst in Lidern und Lippen
+    # (wie in mesh_check): nur Überschneidungen des Körpers selbst zählen
+    mesh = trimesh.Trimesh(template, faces, process=False)
+    labels = trimesh.graph.connected_component_labels(mesh.face_adjacency, node_count=len(faces))
+    main = labels == np.bincount(labels).argmax()
+
+    def crossings(v):
+        return {(a, b) for a, b in self_intersections(v, faces) if main[a] and main[b]}
+
+    base = crossings(template)
     offsets = params.offsets.astype(np.float32).copy()
     touched: set[int] = set()
     for i in range(rounds):
@@ -550,7 +685,7 @@ def repair_offsets(model: BodyModel, params: BodyParams, rounds: int = 12) -> tu
         trial.offsets = offsets
         verts = model.rest_numpy(trial)["vertices"]
         bad_faces = set(np.flatnonzero((fnormals(verts) * ref).sum(1) < 0).tolist())
-        for a, b in self_intersections(verts, faces) - base:
+        for a, b in crossings(verts) - base:
             bad_faces.update((a, b))
         if not bad_faces:
             break
@@ -567,3 +702,34 @@ def _mesh_edges(faces: np.ndarray) -> np.ndarray:
     e = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]])
     e.sort(axis=1)
     return np.unique(e, axis=0)
+
+
+NECK_HEIGHT = "measure-neck-height-incr"
+
+
+def keep_height(model: BodyModel, params: BodyParams, height: float, tolerance: float = 0.001,
+                key: str = NECK_HEIGHT) -> tuple[BodyParams, float]:
+    """Körpergröße (Meter) über die Halslänge wiederherstellen, z. B. wenn die Kopfaufnahme einen
+    flacheren Schädel zeigt: Schultern (aus dem Körpervideo) und Gesicht bleiben, der Hals gleicht
+    aus. Gibt (Parameter, verbleibende Abweichung in Metern) zurück."""
+
+    def error(x: float) -> float:
+        p = params.copy()
+        p.local[key] = x
+        z = model.rest_numpy(p)["vertices"][:, 2]
+        return float(z.max() - z.min()) - height
+
+    x0 = float(params.local.get(key, 0.0))
+    e0 = error(x0)
+    if abs(e0) <= tolerance:
+        return params, e0
+    x1 = float(np.clip(x0 - np.sign(e0) * 0.2, -1.0, 1.0))
+    e1 = error(x1)
+    for _ in range(8):  # Sekantenverfahren, der Regler wirkt fast linear
+        if abs(e1) <= tolerance or abs(e1 - e0) < 1e-9:
+            break
+        x0, e0, x1 = x1, e1, float(np.clip(x1 - e1 * (x1 - x0) / (e1 - e0), -1.0, 1.0))
+        e1 = error(x1)
+    out = params.copy()
+    out.local[key] = x1
+    return out, e1

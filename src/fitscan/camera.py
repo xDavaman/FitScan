@@ -45,6 +45,14 @@ class Intrinsics:
     width: int
     height: int
     focal: float
+    cx: float | None = None  # Bildmitte, falls nicht angegeben
+    cy: float | None = None
+
+    def __post_init__(self):
+        if self.cx is None:
+            self.cx = self.width / 2
+        if self.cy is None:
+            self.cy = self.height / 2
 
     @classmethod
     def phone_default(cls, width: int, height: int) -> Intrinsics:
@@ -52,7 +60,8 @@ class Intrinsics:
         return cls(width, height, f)
 
     def scaled(self, factor: float) -> Intrinsics:
-        return Intrinsics(round(self.width * factor), round(self.height * factor), self.focal * factor)
+        return Intrinsics(round(self.width * factor), round(self.height * factor), self.focal * factor,
+                          self.cx * factor, self.cy * factor)
 
 
 def yaw_matrix(yaw: torch.Tensor) -> torch.Tensor:
@@ -71,8 +80,8 @@ def to_camera(points: torch.Tensor, yaw: torch.Tensor, trans: torch.Tensor) -> t
 
 def project(cam: torch.Tensor, intr: Intrinsics) -> torch.Tensor:
     z = cam[..., 2].clamp_min(1e-3)
-    u = intr.focal * cam[..., 0] / z + intr.width / 2
-    v = intr.focal * cam[..., 1] / z + intr.height / 2
+    u = intr.focal * cam[..., 0] / z + intr.cx
+    v = intr.focal * cam[..., 1] / z + intr.cy
     return torch.stack([u, v], -1)
 
 

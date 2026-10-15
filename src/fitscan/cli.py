@@ -84,7 +84,17 @@ def main(argv: list[str] | None = None) -> None:
     p_scan.add_argument("--fps", type=float, default=4.0, help="ausgewertete Bilder pro Sekunde")
     p_scan.add_argument("--kanten-nachschaerfen", action="store_true",
                         help="Personenmaske nachschärfen (nur bei unruhigem Hintergrund sinnvoll)")
+    p_scan.add_argument("--ohne-hautbild", action="store_true",
+                        help="kein Hautbild (Textur) aus dem Video, Modell einfarbig (schneller)")
+    p_scan.add_argument("--ohne-feinform", action="store_true",
+                        help="keine Feinform aus allen Blickwinkeln (Muskeln, Brust, Rücken), schneller")
+    p_scan.add_argument("--kopfvideo", type=Path,
+                        help="Nahaufnahme des Kopfes (Kopf langsam drehen): Gesicht, Ohren, Augen genauer")
     _add_person_args(p_scan)
+
+    p_head = sub.add_parser("kopf", aliases=["head"], help="Kopfvideo zum letzten Scan einer Person hinzunehmen")
+    p_head.add_argument("video", type=Path, help="Nahaufnahme des Kopfes, Kopf langsam in alle Richtungen drehen")
+    p_head.add_argument("--name", default="Ich", help="Person, deren letzter Scan ergänzt wird")
 
     p_body = sub.add_parser("koerper", aliases=["body"], help="Körper nur aus Maßen")
     _add_person_args(p_body)
@@ -117,27 +127,36 @@ def main(argv: list[str] | None = None) -> None:
         if path:
             print(f"Letzte Aufnahme: {path}\nWeiter mit: fitscan scan \"{path}\" --groesse … --gewicht …")
     elif cmd in ("pruefen", "check"):
-        from .pipeline import IMAGE_SUFFIXES
+        from .pipeline import check_recordings
         from .quality import sector_name
-        from .video import analyze, read_frames, read_images
-        from .vision import PoseAnalyzer
 
-        is_video = len(args.quelle) == 1 and args.quelle[0].suffix.lower() not in IMAGE_SUFFIXES
-        analyzer = PoseAnalyzer(video_mode=is_video)
-        frames = read_frames(args.quelle[0]) if is_video else read_images(args.quelle)
-        _, report = analyze(frames, analyzer, print)
-        analyzer.close()
-        print(f"\nErgebnis: {report.level} ({report.usable} von {report.frames} Bildern brauchbar)")
-        print("Erfasste Blickwinkel:", ", ".join(sector_name(i) for i, c in enumerate(report.covered) if c) or "keine")
-        for line in report.summary:
-            print(" -", line)
+        for rec in check_recordings(list(args.quelle), log=print, keep_frames=False):
+            if rec.report is None:
+                continue
+            report = rec.report
+            print(f"\n{rec.label} – Ergebnis: {report.level} ({report.usable} von {report.frames} Bildern brauchbar)")
+            print("Erfasste Blickwinkel:",
+                  ", ".join(sector_name(i) for i, c in enumerate(report.covered) if c) or "keine")
+            for line in report.summary:
+                print(" -", line)
     elif cmd == "scan":
         from .pipeline import scan
 
         person = _person(args)
         source = args.quelle[0] if len(args.quelle) == 1 else list(args.quelle)
         _print_result(scan(source, person, args.name, device=args.geraet, fps=args.fps,
-                           refine=args.kanten_nachschaerfen, log=print))
+                           refine=args.kanten_nachschaerfen, texture=not args.ohne_hautbild,
+                           head_video=args.kopfvideo, detail=not args.ohne_feinform, log=print))
+    elif cmd in ("kopf", "head"):
+        from .pipeline import add_head
+        from .store import Store
+
+        store = Store()
+        person = store.find(args.name)
+        latest = store.latest(person.id) if person else None
+        if latest is None:
+            raise SystemExit(f"Für „{args.name}“ gibt es noch keinen Scan. Erst „fitscan scan …“ ausführen.")
+        _print_result(add_head(latest, args.video, store, device=args.geraet, log=print))
     elif cmd in ("koerper", "body"):
         from .pipeline import body_from_measurements
 

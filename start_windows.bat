@@ -29,6 +29,7 @@ if errorlevel 1 (
 echo [4/4] FitScan wird eingerichtet oder aktualisiert ...
 uv pip install -q -p "%PY%" -e ".[prototyp]" || goto fehler
 "%PY%" -c "from fitscan.vision import ensure_pose_model; ensure_pose_model()" || goto fehler
+"%PY%" -c "from fitscan.head import ensure_face_model; ensure_face_model()" || goto fehler
 
 "%PY%" -m fitscan info
 echo.

@@ -66,21 +66,28 @@ def _files(result) -> list[str]:
     return [v for k, v in result.files.items() if k.startswith(("glb", "obj"))]
 
 
-def run_scan(files, name, gender, age, height, weight, refine, *optional):
+def _path(f) -> Path | None:
+    if not f:
+        return None
+    return Path(f if isinstance(f, str) else f.name)
+
+
+def run_scan(files, head, name, gender, age, height, weight, refine, texture, detail, *optional):
     from . import pipeline
 
     if not files:
         yield "Bitte zuerst ein Video oder Fotos auswählen.", None, None, None, ""
         return
-    paths = [Path(f if isinstance(f, str) else f.name) for f in files]
+    paths = [_path(f) for f in files]
     person = _person(gender, age, height, weight, list(optional))
     problems = person.validate()
     if problems:
         yield "\n".join(problems), None, None, None, ""
         return
     source = paths[0] if len(paths) == 1 else paths
-    for log, result in _stream(lambda log: pipeline.scan(source, person, name or "Ich",
-                                                         refine=bool(refine), log=log)):
+    for log, result in _stream(lambda log: pipeline.scan(source, person, name or "Ich", refine=bool(refine),
+                                                         texture=bool(texture), head_video=_path(head),
+                                                         detail=bool(detail), log=log)):
         if result is None:
             yield log, None, None, None, ""
         else:
@@ -88,6 +95,19 @@ def run_scan(files, name, gender, age, height, weight, refine, *optional):
             hints = "\n".join(f"- {h}" for h in result.hints) or "- Export entspricht den Cascadeur-Regeln."
             yield (log, _measure_table(result.measures, person.measures), result.files.get("glb"),
                    _files(result), f"**Aufnahme**\n{report}\n\n**Export**\n{hints}")
+
+
+def run_add_head(name: str, head):
+    from . import pipeline
+
+    store = Store()
+    person = store.find(name or "")
+    latest = store.latest(person.id) if person else None
+    if latest is None or not head:
+        yield "Bitte Person mit vorhandenem Scan und ein Kopfvideo wählen.", None, None
+        return
+    for log, result in _stream(lambda log: pipeline.add_head(latest, _path(head), store, log=log)):
+        yield (log, None, None) if result is None else (log, result.files.get("glb"), _files(result))
 
 
 def run_measures_only(name, gender, age, height, weight, *optional):
@@ -166,6 +186,10 @@ def run_selftest(quick: bool):
         yield (log if result is None else result.text())
 
 
+HEAD_VIDEO_LABEL = ("Kopfvideo (optional): Handy etwa 40 cm vor dem Gesicht, Kopf langsam nach links, rechts, "
+                    "oben und unten drehen, neutral schauen, Mund zu")
+
+
 def _show(path: str | None) -> str | None:
     return path
 
@@ -190,8 +214,8 @@ def build():
         with gr.Tab("2. Scan"):
             with gr.Row():
                 with gr.Column():
-                    files = gr.File(label="Video oder Fotos", file_count="multiple",
-                                    file_types=["video", "image"])
+                    files = gr.File(label="Ein Video oder mehrere Fotos (bei mehreren Videos wird das beste "
+                                          "verwendet)", file_count="multiple", file_types=["video", "image"])
                     name = gr.Textbox(label="Name", value="Ich")
                     gender = gr.Dropdown(list(GENDERS), value="Männlich", label="Geschlecht")
                     age = gr.Number(label="Alter (Jahre)", value=30)
@@ -201,6 +225,11 @@ def build():
                         optional = [gr.Number(label=f"{MEASURES[k][0]} (cm)") for k in OPTIONAL]
                     refine = gr.Checkbox(label="Kanten nachschärfen (nur bei unruhigem Hintergrund)",
                                          value=False)
+                    texture = gr.Checkbox(label="Hautbild übernehmen (Hautfarbe, Tattoos, Kleidung; "
+                                                "dauert ohne Grafikkarte einige Minuten länger)", value=True)
+                    detail = gr.Checkbox(label="Feinform aus allen Blickwinkeln (Schultern, Arme, Brust, Rücken, "
+                                               "Waden als echte Form; einige Minuten länger)", value=True)
+                    head = gr.File(label=HEAD_VIDEO_LABEL, file_count="single", file_types=["video"])
                     start = gr.Button("Scan starten", variant="primary")
                     glb_path = gr.State()
                 with gr.Column():
@@ -210,7 +239,7 @@ def build():
                     downloads = gr.File(label="Dateien", file_count="multiple")
                     log = gr.Textbox(label="Ablauf", lines=8)
             # Model3D zeigt Werte aus laufenden Generatoren nicht an, daher im Folgeschritt setzen
-            start.click(run_scan, [files, name, gender, age, height, weight, refine, *optional],
+            start.click(run_scan, [files, head, name, gender, age, height, weight, refine, texture, detail, *optional],
                         [log, table, glb_path, downloads, report]).then(_show, glb_path, model3d)
         with gr.Tab("3. Nur aus Maßen"):
             with gr.Row():
@@ -245,6 +274,12 @@ def build():
                 fbx_go = gr.Button("FBX erstellen (braucht Blender)")
             s_files = gr.File(label="Dateien", file_count="multiple")
             s_msg = gr.Markdown()
+            with gr.Accordion("Kopf nachscannen (Gesicht, Ohren, Augen genauer)", open=False):
+                k_file = gr.File(label=HEAD_VIDEO_LABEL, file_count="single", file_types=["video"])
+                k_go = gr.Button("Kopfvideo zum letzten Scan hinzunehmen")
+                k_log = gr.Textbox(label="Ablauf", lines=6)
+                k_glb = gr.State()
+            k_go.click(run_add_head, [who, k_file], [k_log, k_glb, s_files]).then(_show, k_glb, h_model)
             refresh.click(lambda: gr.Dropdown(choices=person_choices()), None, who)
             who.change(history, who, [h_table, h_text, h_model])
             s_go.click(restyle, [who, s_weight, s_muscle], [h_model, s_files, s_msg])
