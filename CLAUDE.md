@@ -36,6 +36,8 @@ Technischer Plan: https://claude.ai/code/artifact/e834733a-d72b-4a65-bdea-881002
 | `mesh_check.py` | wasserdicht, Orientierung, kaputte oder umgeklappte Dreiecke |
 | `export.py` | eigener GLB-Exporter (Skelett, Gewichte, Formregler), OBJ, Cascadeur-Prüfung, Namensschemata |
 | `blender.py`, `blender_glb_to_fbx.py` | optional FBX/.blend über installiertes Blender |
+| `motion.py` | Bewegungsbibliothek: Bewegung als Gelenkdrehungen (local-ref) + Hüfte in Hüfthöhen, passt auf jeden Körper; Kontakte je Knochen, Gegenstände (`Attachment`), Finger in `bones`; Boden (`fix_ground`), GLB mit Animationen |
+| `mocap.py` | Bewegung aus Handyvideo: MediaPipe-Punkte → Gelenke je Bild (2D robust, 3D-Richtungen, Scharniere, Glätte), Boden und Neigung |
 | `store.py` | Personen und Scan-Verlauf unter `daten/personen/…`, Vergleich von Scans |
 | `pipeline.py` | Gesamtablauf `scan()`, `body_from_measurements()`, `reexport()` |
 | `synthetic.py`, `selftest.py` | künstliche Testkörper und -videos mit bekannten Maßen |
