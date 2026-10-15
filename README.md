@@ -62,6 +62,7 @@ Jeder Scan landet in `daten/personen/<name>/scans/<datum>/`:
 | `haut.jpg` | Hautbild aus dem Video (Hautton, Tattoos, Muttermale, Kleidung) auf Annys UV-Karte, 4096 × 4096 |
 | `ansichten.json` | Lage und Haltung des Körpers in jedem verwendeten Videobild |
 | `kopf.json`, `kopfvergleich.jpg` | nur mit Kopfaufnahme: Gesichtsmaße, Passgenauigkeit, Foto und Modell nebeneinander |
+| `augen.jpg` | nur mit Kopfaufnahme: eigenes, feines Bild der Augäpfel (zweites Material „Augen“ in GLB, FBX, OBJ) |
 | `params.json`, `offsets.npy` | Körperparameter; daraus wird jeder Re-Scan weitergerechnet |
 | `scan.json`, `bilder.json` | Maße, Eingaben, Qualitätsbericht, Passgenauigkeit je Bild |
 
@@ -83,9 +84,12 @@ Häkchen in der Oberfläche entfernen oder `--ohne-hautbild`.
 Gesichtspunkte. Ein Bündelausgleich über alle Bilder ergibt daraus die Gesichtsform und die Kopflage
 je Bild. Annys Kopf wird glatt so verformt, dass ihr Gesicht auf diese Form passt; danach werden
 Schädel und Ohren an den Kopfumriss in allen Bildern angepasst (GrabCut-Freistellung). Das Hautbild
-von Gesicht, Kopfhaut und Ohren kommt scharf aus der Kopfaufnahme, die Augen werden mit der
-gemessenen Irisfarbe neu gezeichnet. Skelett, Netz und UV-Karte bleiben gleich; das Modell bleibt
-riggbar und geschlossen. Mimik (offener Mund, Lächeln) wird übergangen; Haare sind (noch) nur Farbe
+von Gesicht, Kopfhaut und Ohren kommt scharf aus der Kopfaufnahme; nur streifend gesehene Stellen
+(Hinterkopf, Scheitel) werden aus der Umgebung ergänzt. Die Augen werden mit der gemessenen Iris-
+und Augenweißfarbe und in der gemessenen Blickrichtung neu gezeichnet, in einem eigenen Bild
+(etwa zehnmal feiner als in Annys Hautbild). Ist der Schädel flacher oder höher als bei Anny,
+gleicht der Hals aus, damit die eingegebene Körpergröße bleibt. Skelett, Netz und UV-Karte bleiben
+gleich; das Modell bleibt riggbar und geschlossen. Mimik (offener Mund, Lächeln) wird übergangen; Haare sind (noch) nur Farbe
 auf der Kopfhaut.
 
 - **Blender:** Datei → Importieren → glTF 2.0 → `koerper.glb`.

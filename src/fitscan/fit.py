@@ -702,3 +702,34 @@ def _mesh_edges(faces: np.ndarray) -> np.ndarray:
     e = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]])
     e.sort(axis=1)
     return np.unique(e, axis=0)
+
+
+NECK_HEIGHT = "measure-neck-height-incr"
+
+
+def keep_height(model: BodyModel, params: BodyParams, height: float, tolerance: float = 0.001,
+                key: str = NECK_HEIGHT) -> tuple[BodyParams, float]:
+    """Körpergröße (Meter) über die Halslänge wiederherstellen, z. B. wenn die Kopfaufnahme einen
+    flacheren Schädel zeigt: Schultern (aus dem Körpervideo) und Gesicht bleiben, der Hals gleicht
+    aus. Gibt (Parameter, verbleibende Abweichung in Metern) zurück."""
+
+    def error(x: float) -> float:
+        p = params.copy()
+        p.local[key] = x
+        z = model.rest_numpy(p)["vertices"][:, 2]
+        return float(z.max() - z.min()) - height
+
+    x0 = float(params.local.get(key, 0.0))
+    e0 = error(x0)
+    if abs(e0) <= tolerance:
+        return params, e0
+    x1 = float(np.clip(x0 - np.sign(e0) * 0.2, -1.0, 1.0))
+    e1 = error(x1)
+    for _ in range(8):  # Sekantenverfahren, der Regler wirkt fast linear
+        if abs(e1) <= tolerance or abs(e1 - e0) < 1e-9:
+            break
+        x0, e0, x1 = x1, e1, float(np.clip(x1 - e1 * (x1 - x0) / (e1 - e0), -1.0, 1.0))
+        e1 = error(x1)
+    out = params.copy()
+    out.local[key] = x1
+    return out, e1

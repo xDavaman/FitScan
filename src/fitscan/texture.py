@@ -421,9 +421,13 @@ def observe(model: BodyModel, m: UVMap, shot: Shot) -> Observation | None:
 class TextureBaker:
     """Sammelt Farben aus beliebig vielen Bildern (eins nach dem anderen, spart Speicher)."""
 
-    def __init__(self, model: BodyModel, size: int = TEXTURE_SIZE, reference: np.ndarray | None = None):
+    def __init__(self, model: BodyModel, size: int = TEXTURE_SIZE, reference: np.ndarray | None = None,
+                 best_full: float | None = None):
         """reference: vorläufiges Hautbild; Bilder, die an einer Stelle stark davon abweichen
-        (verrutscht, Schatten, Hintergrund), zählen dort kaum."""
+        (verrutscht, Schatten, Hintergrund), zählen dort kaum. best_full: eine Stelle gilt erst als
+        sicher gesehen, wenn ein Bild sie mindestens mit diesem Gewicht zeigt; nur streifend oder am
+        Umriss gesehene Stellen (dort mischt sich leicht Hintergrund hinein) werden aus der Umgebung
+        ergänzt."""
         self.model = model
         self.map = uv_map(model, size)
         self.reference = None
@@ -435,6 +439,8 @@ class TextureBaker:
         self.base_w = np.zeros(n, np.float32)
         self.detail = np.zeros((n, 3), np.float32)
         self.detail_w = np.zeros(n, np.float32)
+        self.best_full = best_full
+        self.best = np.zeros(n, np.float32)
         self.shots = 0
 
     def add(self, shot: Shot) -> float:
@@ -453,6 +459,7 @@ class TextureBaker:
             d = np.linalg.norm(base - self.reference[sel], axis=1)
             w = w * np.exp(-((d / ROBUST_SIGMA) ** 2))
         wb = w ** BASE_POWER
+        self.best[sel] = np.maximum(self.best[sel], w)
         self.base[sel] += wb[:, None] * base
         self.base_w[sel] += wb
         wd = w ** DETAIL_POWER
@@ -478,6 +485,8 @@ class TextureBaker:
         nv = self.model.num_vertices
         corners = faces[m.face]
         alpha = np.clip(self.base_w / SEEN_FULL, 0, 1)
+        if self.best_full:
+            alpha *= np.clip(self.best / self.best_full, 0, 1)
         wv = (m.bary * alpha[:, None]).ravel()
         idx = corners.ravel()
         vw = np.bincount(idx, weights=wv, minlength=nv)

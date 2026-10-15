@@ -673,6 +673,7 @@ def _sparse(m) -> torch.Tensor:
 BLINK_LIMIT = 0.3  # Lider (halb) zu
 HEAD_FEATHER = 8.0  # Texel: weicher Übergang zwischen Kopf- und Körperhautbild
 HEAD_WEIGHT = (0.6, 0.95)  # Skinning-Gewicht des Kopfes: darunter Körperhautbild, darüber Kopfaufnahme
+HEAD_BEST_VIEW = 0.1  # Hinterkopf und Scheitel nur streifend gesehen: aus der Umgebung ergänzen
 
 
 def head_region(model: BodyModel) -> np.ndarray:
@@ -752,7 +753,7 @@ def bake_head(model: BodyModel, verts: np.ndarray, sol: FaceSolution, placement:
                                 yaw=0.0, trans=np.zeros(3), camera=head @ sol.rotations[k].T + sol.translations[k],
                                 region=region)
 
-    baker = TextureBaker(model, size)
+    baker = TextureBaker(model, size, best_full=HEAD_BEST_VIEW)
     whites, iris, sclera = [], [], []
     for n, (k, mask, shot) in enumerate(shots()):
         baker.add(shot)
@@ -771,7 +772,7 @@ def bake_head(model: BodyModel, verts: np.ndarray, sol: FaceSolution, placement:
     if fine_align:
         k_c = 1920 / max(intr.width, intr.height)
         cintr = intr.scaled(k_c)
-        refined = TextureBaker(model, size, reference=skin)
+        refined = TextureBaker(model, size, reference=skin, best_full=HEAD_BEST_VIEW)
         shifts = []
         for n, (_, _, shot) in enumerate(shots()):
             to_cmp = np.diag([k_c, k_c, 1.0]) @ np.linalg.inv(shot.to_image)
@@ -1025,10 +1026,10 @@ def merge_head_skin(body: np.ndarray, head: np.ndarray, alpha: np.ndarray, body_
 
 
 def compare_head(model: BodyModel, verts: np.ndarray, sol: FaceSolution, placement: HeadPlacement, video: Path,
-                 skin: np.ndarray, height: int = 640) -> np.ndarray | None:
+                 skin: np.ndarray, height: int = 640, eyes: np.ndarray | None = None) -> np.ndarray | None:
     """Vergleichsbild: Kopfvideo und Modell mit Hautbild aus derselben Richtung (vorn, beide Seiten,
-    von unten), je Zeile Foto links, Modell rechts."""
-    from .texture import render_textured
+    von unten), je Zeile Foto links, Modell rechts. eyes: eigenes Augenbild (wie im Export)."""
+    from .texture import eye_layout, render_textured
     from .video import read_full_frames
 
     region = head_region(model)
@@ -1036,6 +1037,16 @@ def compare_head(model: BodyModel, verts: np.ndarray, sol: FaceSolution, placeme
     used = region[faces].max(1) > 0
     uv = model.anny.texture_coordinates.detach().cpu().numpy()
     face_uv = model.anny.face_texture_coordinate_indices.detach().cpu().numpy()[used]
+    if eyes is not None:
+        # Hautbild und Augenbild nebeneinander in ein Bild, Texturkoordinaten entsprechend
+        half = min(skin.shape[0], 2048)
+        atlas = np.zeros((2 * half, 2 * half, 3), np.uint8)
+        atlas[:half, :half] = cv2.resize(skin, (half, half), interpolation=cv2.INTER_AREA)
+        atlas[:half, half:] = cv2.resize(eyes, (half, half), interpolation=cv2.INTER_AREA)
+        uv, all_uv, eye = eye_layout(model)
+        uv = uv * 0.5 + [0.0, 0.5]
+        uv[np.unique(all_uv[eye]), 0] += 0.5
+        skin, face_uv = atlas, all_uv[used]
     head_faces = faces[head_vertex_mask(model)[faces].all(1)]
     head = placement.to_head(verts)
     fwd = sol.rotations @ (placement.rotation.T @ np.array([0.0, -1.0, 0.0]))

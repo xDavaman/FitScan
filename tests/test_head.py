@@ -175,3 +175,24 @@ def test_eye_texture_is_sharp(model):
     look = p[blue].mean(0)
     want = (target - c) / np.linalg.norm(target - c)
     assert look @ want / np.linalg.norm(look) > 0.98  # Iris dort, wohin das Auge blickt
+
+
+def test_keep_height_lengthens_neck(model):
+    """Flacherer Schädel: der Hals gleicht aus, Größe und Schultern bleiben."""
+    from fitscan.fit import keep_height
+
+    params = BodyParams()
+    rest = model.rest_numpy(params)
+    v = rest["vertices"]
+    height = float(np.ptp(v[:, 2]))
+    flat = params.copy()
+    off = np.zeros_like(v)
+    top = H.head_vertex_mask(model) & (v[:, 2] > v[:, 2].max() - 0.06)
+    off[top, 2] = -0.01 * (v[top, 2] - (v[:, 2].max() - 0.06)) / 0.06  # Scheitel 1 cm tiefer
+    flat.offsets = off.astype(np.float32)
+    assert float(np.ptp(model.rest_numpy(flat)["vertices"][:, 2])) < height - 0.008
+    fixed, gap = keep_height(model, flat, height)
+    out = model.rest_numpy(fixed)
+    assert abs(gap) < 0.001 and abs(float(np.ptp(out["vertices"][:, 2])) - height) < 0.001
+    i = model.bone_labels.index("upperarm01.L")
+    assert np.allclose(out["bone_heads"][i], rest["bone_heads"][i], atol=1e-4)  # Schultern bleiben

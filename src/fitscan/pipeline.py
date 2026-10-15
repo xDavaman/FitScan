@@ -410,7 +410,7 @@ def head_stage(model: BodyModel, params: BodyParams, video: Path, body_skin: np.
     Hautbild (eingesetzt ins Körper-Hautbild), Augen als eigenes Bild. Gibt (Parameter, Hautbild,
     Augenbild, Kennzahlen) zurück; speichert kopf.json, kopfvergleich.jpg, haut.jpg, augen.jpg."""
     from . import head as H
-    from .fit import repair_offsets
+    from .fit import keep_height, repair_offsets
 
     log = log or _noop
     log("Kopfvideo: Gesichtspunkte werden in jedem Bild gesucht …")
@@ -452,10 +452,19 @@ def head_stage(model: BodyModel, params: BodyParams, video: Path, body_skin: np.
             if eyes is not None:
                 cv2.imwrite(str(Path(folder) / "augen.jpg"), cv2.cvtColor(eyes, cv2.COLOR_RGB2BGR),
                             [cv2.IMWRITE_JPEG_QUALITY, 94])
-            sheet = H.compare_head(model, new, sol, place, video, skin)
+            sheet = H.compare_head(model, new, sol, place, video, skin, eyes=eyes)
             if sheet is not None:
                 cv2.imwrite(str(Path(folder) / "kopfvergleich.jpg"), cv2.cvtColor(sheet, cv2.COLOR_RGB2BGR),
                             [cv2.IMWRITE_JPEG_QUALITY, 90])
+    # Zeigt die Kopfaufnahme einen flacheren (höheren) Schädel als Annys, gleicht der Hals aus: die
+    # eingegebene Körpergröße und die Schultern aus dem Körpervideo bleiben (erst nach dem Hautbild,
+    # das noch zur Lage des Kopfes im Kopfvideo passen muss; die UV-Karte bleibt gleich)
+    target, now = (float(np.ptp(model.rest_numpy(p)["vertices"][:, 2])) for p in (params, out))
+    if abs(now - target) > 0.001:
+        out, _ = keep_height(model, out, target)
+        info["hals_ausgleich_mm"] = round((target - now) * 1000, 1)
+        log(f"Schädel {abs(target - now) * 1000:.0f} mm {'flacher' if now < target else 'höher'} als bei Anny: "
+            f"Hals gleicht aus, Körpergröße bleibt {target * 100:.1f} cm.")
     if folder is not None:
         (Path(folder) / "kopf.json").write_text(json.dumps(info, indent=1), "utf-8")
     return out, skin, eyes, info
