@@ -257,7 +257,18 @@ def encode_skin(skin: np.ndarray) -> bytes:
     return data.tobytes()
 
 
-def write_glb(rig: RiggedMesh, path: Path, name: str = "FitScan") -> Path:
+@dataclasses.dataclass
+class GlbAnimation:
+    """Bewegung für write_glb: Drehung jedes Gelenks je Bild, dazu die Lage des Hüftgelenks."""
+
+    name: str
+    times: np.ndarray  # (F,) Sekunden
+    rotations: np.ndarray  # (F, J, 4) Quaternion x, y, z, w, Reihenfolge wie RiggedMesh.joint_names
+    root_translation: np.ndarray  # (F, 3) lokale Lage von Gelenk 1 (Annys „root“)
+
+
+def write_glb(rig: RiggedMesh, path: Path, name: str = "FitScan",
+              animations: list[GlbAnimation] | None = None) -> Path:
     buf = _Buffer()
     textured = rig.skin is not None
     if textured:
@@ -324,6 +335,9 @@ def write_glb(rig: RiggedMesh, path: Path, name: str = "FitScan") -> Path:
         mesh["weights"] = [0.0] * len(targets)
         mesh["extras"] = {"targetNames": target_names}
 
+    if animations:
+        extra["animations"] = [_animation(a, nodes, first_joint, buf) for a in animations]
+
     gltf = {
         "asset": {"version": "2.0", "generator": "FitScan"},
         "scene": 0,
@@ -352,6 +366,26 @@ def write_glb(rig: RiggedMesh, path: Path, name: str = "FitScan") -> Path:
         f.write(struct.pack("<I4s", len(buf.data), b"BIN\x00"))
         f.write(bytes(buf.data))
     return path
+
+
+def _animation(anim: GlbAnimation, nodes: list[dict], first_joint: int, buf: _Buffer) -> dict:
+    times = buf.add(anim.times.astype(np.float32), FLOAT, "SCALAR", minmax=True)
+    samplers, channels = [], []
+
+    def channel(node: int, path: str, values: np.ndarray, kind: str) -> None:
+        samplers.append({"input": times, "output": buf.add(values.astype(np.float32), FLOAT, kind),
+                         "interpolation": "LINEAR"})
+        channels.append({"sampler": len(samplers) - 1, "target": {"node": node, "path": path}})
+
+    for j in range(anim.rotations.shape[1]):
+        q = anim.rotations[:, j]
+        rest = np.array(nodes[first_joint + j]["rotation"])
+        # Gelenke, die sich nie bewegen (Finger, Zehen ...), brauchen keine Spur
+        if np.abs(np.abs(q @ rest) - 1.0).max() < 1e-7:
+            continue
+        channel(first_joint + j, "rotation", q, "VEC4")
+    channel(first_joint + 1, "translation", anim.root_translation, "VEC3")
+    return {"name": anim.name, "samplers": samplers, "channels": channels}
 
 
 def write_obj(rig: RiggedMesh, path: Path) -> Path:
