@@ -591,7 +591,7 @@ def make_scene(arm_obj, mesh, frames, offsets, captions):
     return cam
 
 
-def add_captions(cam, captions, size: float = 0.05, pos=(-0.30, 0.15, -1.0)):
+def add_captions(cam, captions, size: float = 0.05, pos=(-0.30, 0.15, -1.0), center: bool = False):
     mat = bpy.data.materials.get("Schrift") or bpy.data.materials.new("Schrift")
     mat.use_nodes = True
     em = mat.node_tree.nodes.new("ShaderNodeEmission")
@@ -604,6 +604,8 @@ def add_captions(cam, captions, size: float = 0.05, pos=(-0.30, 0.15, -1.0)):
         curve = bpy.data.curves.new(f"Text{i}", "FONT")
         curve.body = text
         curve.size = size
+        if center:
+            curve.align_x = "CENTER"
         obj = bpy.data.objects.new(f"Beschriftung {i}", curve)
         obj.data.materials.append(mat)
         bpy.context.scene.collection.objects.link(obj)
@@ -634,7 +636,7 @@ def face_demo(arm_obj, mesh, out_dir: str, render: bool) -> dict:
     """Jeder Gesichtsregler einzeln, Körper in Ruhe: eigene Aktion und Nahaufnahme-Video."""
     shape_keys = mesh.data.shape_keys
     names = [k.name for k in shape_keys.key_blocks[1:] if not k.name.startswith(("weight_", "muscle_"))]
-    step = 0.8
+    step = 0.6
     keys = [(0.0, {})]
     captions = []
     for i, n in enumerate(names):
@@ -665,15 +667,16 @@ def face_demo(arm_obj, mesh, out_dir: str, render: bool) -> dict:
         if o.name.startswith("Beschriftung"):
             o.animation_data_clear()
             o.hide_render = True
-    add_captions(cam, captions, size=0.022, pos=(-0.17, -0.08, -0.5))
+    # 85 mm in 0,5 m Abstand: das Bild ist nur gut 20 cm breit, die Schrift also klein und mittig
+    add_captions(cam, captions, size=0.0075, pos=(0.0, -0.088, -0.5), center=True)
     light = bpy.data.objects.new("Gesichtslicht", bpy.data.lights.new("Gesichtslicht", "AREA"))
-    light.data.energy = 60
+    light.data.energy = 18
     light.data.size = 0.8
     light.location = cam.location + Vector((-0.5, -0.2, 0.4))
     light.rotation_euler = (head - light.location).to_track_quat("-Z", "Y").to_euler()
     scene.collection.objects.link(light)
     shape_keys.animation_data.action = action
-    render_video(os.path.join(out_dir, "mimik_regler.mp4"), 0, int(end * FPS), size=(720, 720))
+    render_video(os.path.join(out_dir, "mimik_regler.mp4"), 0, int(end * FPS), size=(600, 600))
     return info
 
 
@@ -708,8 +711,26 @@ FACE_LABELS = {
 # --------------------------------------------------------------------------- Export
 
 
-def export_all(arm_obj, mesh, out_dir: str, stem: str) -> dict:
+def save_images(out_dir: str, stem: str) -> dict:
+    """Haut- und Augenbild als eigene Dateien: Cascadeur liest Bilder nicht aus der FBX, und Blenders
+    FBX-Export bettet eingepackte Bilder ohne Dateipfad nur einmal ein (das Augenbild fehlte)."""
     files = {}
+    for img in bpy.data.images:
+        if img.size[0] == 0:
+            continue
+        if img.packed_file is None:
+            continue
+        ext = ".png" if img.packed_file.data[:4] == b"\x89PNG" else ".jpg"
+        path = os.path.join(out_dir, f"{stem}_{img.name.lower()}{ext}")
+        with open(path, "wb") as f:
+            f.write(img.packed_file.data)  # Originalbild, ohne erneute Kompression
+        img.filepath = path
+        files[img.name.lower()] = path
+    return files
+
+
+def export_all(arm_obj, mesh, out_dir: str, stem: str) -> dict:
+    files = save_images(out_dir, stem)
     bpy.ops.object.select_all(action="DESELECT")
     arm_obj.select_set(True)
     mesh.select_set(True)
