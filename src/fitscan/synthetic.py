@@ -131,3 +131,29 @@ def film_video(model: BodyModel, params: BodyParams, path, arm_deg: float = 0.0,
         writer.write(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
     writer.release()
     return path
+
+
+def motion_video(model: BodyModel, params: BodyParams, motion, path, skin: np.ndarray, width: int = 960,
+                 height: int = 540, distance: float = 4.0, camera_height: float = 1.0,
+                 pitch_deg: float = 0.0) -> dict:
+    """Künstliches Video einer bekannten Bewegung aus einer fest stehenden Kamera (Test für
+    mocap). Die Kamera steht auf der Seite -Y und blickt entlang +Y; pitch_deg > 0 neigt sie nach
+    unten. Gibt Kamera und Bewegung als Wahrheit zurück."""
+    from .motion import play
+    from .texture import render_textured
+
+    pb = play(model, params, motion)
+    intr = Intrinsics.phone_default(width, height)
+    p = math.radians(pitch_deg)
+    tilt = np.array([[1, 0, 0], [0, math.cos(p), -math.sin(p)], [0, math.sin(p), math.cos(p)]])
+    to_cam = tilt @ np.array([[1.0, 0, 0], [0, 0, -1.0], [0, 1.0, 0]])
+    eye = np.array([0.0, -distance, camera_height])
+    uv = model.anny.texture_coordinates.cpu().numpy()
+    fuv = model.anny.face_texture_coordinate_indices.cpu().numpy()
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), motion.fps, (width, height))
+    for verts in pb.vertices:
+        cam = (verts - eye) @ to_cam.T
+        rgb = render_textured(None, model.faces, uv, fuv, skin, 0.0, None, intr, camera=cam)
+        writer.write(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+    writer.release()
+    return {"intr": intr, "to_cam": to_cam, "eye": eye, "playback": pb}

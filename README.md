@@ -121,6 +121,22 @@ auf der Kopfhaut.
 
 Re-Scans unter demselben Namen starten beim letzten Scan; die Oberfläche zeigt die Veränderung der Maße.
 
+## Bewegungsbibliothek (im Aufbau)
+
+Bewegungen werden unabhängig vom Körper gespeichert (`fitscan.motion.Motion`, Datei `.npz`): je Bild
+die Gelenkdrehungen in Annys Bezugssystem und die Hüfte in Vielfachen der Hüfthöhe. Beim Abspielen
+auf einem gescannten Modell wird die Hüfte mit dessen Hüfthöhe malgenommen; danach stellt
+`fix_ground` die Füße auf den Boden (nichts sinkt ein, stehende Füße rutschen nicht). Finger,
+Kontakte (Füße, Hände, Gesäß) und gegriffene Gegenstände haben im Format ihren Platz.
+`motion.export_glb` schreibt Modell und Bewegungen als glTF-Animationen (eine je Bewegung).
+
+`fitscan.mocap.fit_motion` gewinnt eine Bewegung aus einem Video mit fest stehendem Handy: MediaPipe
+liefert Körperpunkte, gesucht sind Gelenkdrehungen und Hüftlage je Bild für den schon gescannten
+Körper. Im künstlichen Test (Gang quer zur Kamera, Hocke mit Sprung) liegen die Gelenke im Mittel
+6 bis 8 cm neben der Wahrheit, vor allem in der Tiefe; die Neigung des Handys sollte bekannt sein
+(senkrechte Kanten im Hintergrund oder Lagesensor). Freie Aufnahmen der CMU (dürfen in verkaufte
+Produkte, nicht als Daten weiterverkauft werden) lädt `scripts/hole_bewegungen.py` bei der Einrichtung.
+
 ## Stand der Genauigkeit
 
 Gemessen an gerenderten Testvideos mit bekannten Maßen (Selbsttest, MediaPipe-Freistellung):
