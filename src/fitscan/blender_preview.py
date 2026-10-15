@@ -80,7 +80,7 @@ def build_scene(n_cylinders: int, fps: int, frames: int):
     world.node_tree.nodes["Background"].inputs["Strength"].default_value = 0.6
     sc.world = world
     cam = bpy.data.objects.new("Kamera", bpy.data.cameras.new("Kamera"))
-    cam.data.lens = 40
+    cam.data.lens = 35
     sc.collection.objects.link(cam)
     sc.camera = cam
     sc.render.engine = "BLENDER_EEVEE"
@@ -126,9 +126,14 @@ def main(argv):
     mesh, index = load_body(glb, d["rest"])
     cylinders, cam = build_scene(cyl.shape[1], fps, len(verts))
     caption, caption_at = add_caption(cam, list(d["captions"]), fps)
-    target = verts.mean(axis=(0, 1))
-    target[2] = 0.85
-    cam_offset = np.array(d["camera"]) if "camera" in d else np.array([2.6, -3.0, 0.6])
+    # Ganzen Ablauf samt Geräten ins Bild nehmen: Mitte des Bereichs, Abstand nach Höhe.
+    points = np.concatenate([verts.reshape(-1, 3), cyl[..., :3].reshape(-1, 3)])
+    low, high = points.min(axis=0), points.max(axis=0)
+    target = (low + high) / 2
+    direction = np.array(d["camera"]) if "camera" in d else np.array([2.6, -3.0, 0.6])
+    half_fov = np.arctan(36 * 9 / 16 / 2 / cam.data.lens)
+    distance = 1.2 * (high[2] - low[2]) / 2 / np.tan(half_fov) + 0.5
+    cam_offset = direction / np.linalg.norm(direction) * max(distance, float(np.linalg.norm(direction)))
 
     def update(scene, *_):
         f = min(max(scene.frame_current, 0), len(verts) - 1)
