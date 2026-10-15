@@ -105,8 +105,14 @@ gleicht der Hals aus, damit die eingegebene Körpergröße bleibt. Skelett, Netz
 gleich; das Modell bleibt riggbar und geschlossen. Mimik (offener Mund, Lächeln) wird übergangen; Haare sind (noch) nur Farbe
 auf der Kopfhaut.
 
-- **Blender:** Datei → Importieren → glTF 2.0 → `koerper.glb`.
+- **Blender:** Datei → Importieren → glTF 2.0 → `koerper.glb`. Blender zeigt das Modell zuerst grau
+  (Volumenansicht); Haut und Augen erscheinen in der Materialvorschau (Taste Z). Für Farben wie im
+  Video unter Render → Farbmanagement die Ansichtstransformation „Standard“ wählen. `koerper.blend`
+  öffnet schon so.
 - **Cascadeur:** `koerper_unreal.glb` importieren (oder FBX, siehe unten), dann Quick Rigging.
+  Cascadeur übernimmt die Bilder nicht aus der Datei: Körper anklicken, Objekt-Eigenschaften →
+  Material → Base Color Map → `koerper_haut.jpg` (Augen: `koerper_augen.jpg`), und unter Mesh object
+  „Always show textures“ einschalten.
 - **FBX:** Blender (kostenlos) installieren, dann im Reiter „Verlauf und Statur“ auf „FBX erstellen“
   oder `start_windows.bat fbx pfad\koerper_unreal.glb`. Liegt Blender nicht am Standardort, den Pfad zu
   `blender.exe` in der Umgebungsvariable `FITSCAN_BLENDER` angeben.
