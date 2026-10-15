@@ -108,6 +108,11 @@ def main(argv: list[str] | None = None) -> None:
     p_fbx.add_argument("glb", type=Path)
     p_fbx.add_argument("--ziel", type=Path)
 
+    p_anim = sub.add_parser("bewegung", aliases=["animation"],
+                            help="Modell bewegen (Sprung, Rolle, Sprint mit Sturz) und Gesichtsregler hinzufügen")
+    p_anim.add_argument("glb", type=Path, help="exportiertes koerper_unreal.glb oder koerper.glb")
+    p_anim.add_argument("ziel", type=Path, help="Ausgabeordner")
+    p_anim.add_argument("--ohne-video", action="store_true", help="keine Vorschauvideos rendern")
     p_test = sub.add_parser("selbsttest", aliases=["selftest"], help="Testkörper filmen und anpassen")
     p_test.add_argument("--schnell", action="store_true")
 
@@ -183,6 +188,13 @@ def main(argv: list[str] | None = None) -> None:
         target = args.ziel or args.glb.with_suffix(".fbx")
         info = convert(args.glb, target)
         print(f"FBX geschrieben: {target}\n{info}")
+    elif cmd in ("bewegung", "animation"):
+        from .animation import animate
+
+        info = animate(args.glb, args.ziel, video=not args.ohne_video)
+        for k, v in info["dateien"].items():
+            print(f"  {k:12s} {v}")
+        print(f"  {len(info['gesichtsregler'])} Gesichtsregler, {info['dauer_s']} s Bewegung")
     elif cmd in ("selbsttest", "selftest"):
         from .selftest import run
 
