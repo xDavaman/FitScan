@@ -291,7 +291,7 @@ def deadlift(fig: P.Figure, reps: int = 2) -> Exercise:
     grips = _grips(fig, BAR_RADIUS)
     palms = {s: np.array([0, 1.0, 0]) for s in P.SIDES}
     setup_x, setup = deadlift_setup(fig, grips)
-    top = deadlift_pose(-3, 0, 2, arms_fwd=14)  # aufrecht, Schultern zurück, Arme vor den Oberschenkeln
+    top = deadlift_pose(-3, 0, 2, arms_fwd=20)  # aufrecht, Schultern zurück, Arme vor den Oberschenkeln
     stand = standing()
     reach = deadlift_pose(*setup_x)
     keys = [(0.0, stand), (0.4, stand)]
@@ -364,5 +364,94 @@ def deadlift(fig: P.Figure, reps: int = 2) -> Exercise:
     contacts = {f"foot.{s}": np.ones(len(times), bool) for s in P.SIDES}
     contacts.update({f"wrist.{s}": holding for s in P.SIDES})
     ex = Exercise("Kreuzheben", FPS, frames, root, [(barbell(), world)], attachments, contacts,
-                  [(0, 1.6, "Kreuzheben"), (1.6, 2.0, "Hände schließen sich um die Stange")])
+                  [(0.0, 1.6, "Kreuzheben mit der Langhantel"),
+                   (1.6, 2.0, "Hände schließen sich um die Stange"),
+                   (2.0, times[-1] + 1, "Heben aus Beinen und Hüfte, Stange nah am Körper")])
+    return _finish(fig, ex, frames, root)
+
+
+def _hold_props(fig: P.Figure, poses: np.ndarray, root: np.ndarray, grips: dict, prop: Prop):
+    """Je Hand ein Gerät (Kurzhanteln): Lage je Bild und Attachment im Handgelenk-Knochen."""
+    out, attachments = [], []
+    for s, g in grips.items():
+        hand = poses[:, fig.model.bone(f"wrist.{s}")].copy()
+        hand[:, :3, 3] += root
+        out.append((dataclasses.replace(prop, name=f"{prop.name} {'links' if s == 'L' else 'rechts'}"),
+                    hand @ g.offset))
+        attachments.append(dict(name=out[-1][0].name, bone=f"wrist.{s}", start=0, end=len(poses) - 1,
+                                offset=g.offset))
+    return out, attachments
+
+
+def curl(fig: P.Figure, reps: int = 3) -> Exercise:
+    """Bizeps-Curl mit zwei Kurzhanteln: Oberarme bleiben am Körper, Handflächen nach vorn."""
+    grips = _grips(fig, DUMBBELL_RADIUS)
+    palms = {s: np.array([0, -1.0, 0]) for s in P.SIDES}  # Handfläche nach vorn, Hantel davor
+
+    def arms(elbow: float, fwd: float) -> dict:
+        return P.pose(standing(), arms=dict(down=24, out=0, fwd=fwd, elbow=elbow))
+
+    bottom, top = arms(8, 2), arms(135, 14)
+    keys = [(0.0, bottom), (0.6, bottom)]
+    t = 0.6
+    for _ in range(reps):
+        keys += [(t + 1.1, top), (t + 1.4, top), (t + 2.6, bottom), (t + 2.9, bottom)]
+        t += 2.9
+    times = frames_between(t + 0.4)
+    keys.append((times[-1], bottom))
+    poses = P.sample(keys, times)
+    # Griff einmal unten ausrichten, dann folgt die Hand dem Unterarm
+    base, _ = hold(fig, [fig.poser.rotations(bottom)], grips, palms)
+    fixed = {k: v for k, v in base[0].items() if k.startswith(("lowerarm02", "wrist", "finger", "metacarpal"))}
+    frames = []
+    for p in poses:
+        r = fig.poser.rotations(p)
+        r.update(fixed)
+        frames.append(r)
+    posed = fig.pose(frames)
+    root = plant_feet(fig, posed["vertices"])
+    props, attachments = _hold_props(fig, posed["poses"], root, grips, dumbbell())
+    contacts = {f"foot.{s}": np.ones(len(times), bool) for s in P.SIDES}
+    contacts.update({f"wrist.{s}": np.ones(len(times), bool) for s in P.SIDES})
+    ex = Exercise("Bizeps-Curl", FPS, frames, root, props, attachments, contacts,
+                  [(0.0, times[-1] + 1, "Bizeps-Curl mit Kurzhanteln, Oberarme bleiben ruhig")])
+    return _finish(fig, ex, frames, root)
+
+
+def pullup(fig: P.Figure, reps: int = 2, clearance: float = 0.12) -> Exercise:
+    """Klimmzug im Obergriff: aus dem Hang hochziehen, bis das Kinn über der Stange ist."""
+    grips = _grips(fig, PULLUP_RADIUS)
+    palms = {s: np.array([0, -1.0, 0]) for s in P.SIDES}  # Handrücken zum Gesicht, Stange vor der Handfläche
+    legs = dict(hip=8, knee=25, foot=25, out=2)
+
+    def hang(down: float, elbow: float, fwd: float = 0, bend: float = 0, neck: float = 0) -> dict:
+        return P.pose(None, arms=dict(down=down, fwd=fwd, elbow=elbow), legs=legs,
+                      spine=dict(bend=bend, neck=neck), shoulders=dict(up=12 - elbow * 0.12))
+
+    low, high = hang(-122, 0), hang(-58, 118, fwd=12, bend=-6, neck=-12)
+    keys = [(0.0, low), (0.8, low)]
+    t = 0.8
+    for _ in range(reps):
+        keys += [(t + 1.3, high), (t + 1.7, high), (t + 3.1, low), (t + 3.5, low)]
+        t += 3.5
+    times = frames_between(t + 0.3)
+    keys.append((times[-1], low))
+    poses = P.sample(keys, times)
+    frames, _ = hold(fig, [fig.poser.rotations(p) for p in poses], grips, palms)
+    posed = fig.pose(frames)
+    bars = bar_frames(fig, posed["poses"], grips)
+    # Die Stange hängt fest; der Körper hängt an ihr. Höhe so, dass die Füße im Hang frei sind.
+    first = posed["vertices"][0]
+    height = bars[0, 2, 3] - first[:, 2].min() + clearance
+    target = np.array([0.0, 0.0, height])
+    root = target - bars[:, :3, 3]
+    world = np.tile(np.eye(4), (len(times), 1, 1))
+    world[:, :3, 3] = target
+    hand = posed["poses"][0, fig.model.bone("wrist.R")].copy()
+    hand[:3, 3] += root[0]
+    attachments = [dict(name="Klimmzugstange", bone="wrist.R", start=0, end=len(times) - 1,
+                        offset=np.linalg.inv(hand) @ world[0], fixed=True)]
+    contacts = {f"wrist.{s}": np.ones(len(times), bool) for s in P.SIDES}
+    ex = Exercise("Klimmzug", FPS, frames, root, [(pullup_bar(), world)], attachments, contacts,
+                  [(0.0, times[-1] + 1, "Klimmzug im Obergriff, Kinn über die Stange")])
     return _finish(fig, ex, frames, root)
