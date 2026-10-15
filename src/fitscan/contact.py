@@ -139,11 +139,20 @@ def intersecting_faces(vertices: np.ndarray, faces: np.ndarray, edges: np.ndarra
 # --------------------------------------------------------------------------- Prüfung
 
 
+def _vertex_normals(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
+    tri = vertices[faces]
+    n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+    out = np.zeros_like(vertices)
+    for k in range(3):
+        np.add.at(out, faces[:, k], n)
+    return out / np.maximum(np.linalg.norm(out, axis=1, keepdims=True), 1e-12)
+
+
 @dataclasses.dataclass
 class Finding:
     kind: str  # "boden", "geraet", "koerper"
     where: str  # Körperteil(e)
-    depth: float  # Meter (bei "koerper": Zahl der durchstoßenen Dreiecke)
+    depth: float  # Meter: wie tief es steckt (bei "falte": Zahl der durchstoßenen Dreiecke)
     detail: str = ""
 
 
@@ -172,16 +181,21 @@ class Checker:
         if self_check:
             hits = intersecting_faces(vertices, self.faces, self.edges)
             new = [(int(e), int(f)) for e, f in hits if (int(e), int(f)) not in self.baseline]
-            pairs: dict[tuple[str, str], int] = {}
+            pairs: dict[tuple[str, str], list] = {}
             for e, f in new:
                 a = self.vertex_part[self.edges[e, 0]]
                 b = self.vertex_part[self.faces[f, 0]]
                 if a == b:
                     continue  # Falten innerhalb eines Körperteils (z. B. Kniekehle) zählen getrennt
-                key = tuple(sorted((a, b)))
-                pairs[key] = pairs.get(key, 0) + 1
-            for (a, b), n in sorted(pairs.items(), key=lambda kv: -kv[1]):
-                out.append(Finding("koerper", f"{a} / {b}", float(n)))
+                pairs.setdefault(tuple(sorted((a, b))), []).append(vertices[self.edges[e, 0]])
+            if pairs:
+                normals = _vertex_normals(vertices, self.faces)
+            found = []
+            for (a, b), points in pairs.items():
+                depth = max(self._sink(vertices, normals, a, b, np.array(points)),
+                            self._sink(vertices, normals, b, a, np.array(points)))
+                found.append(Finding("koerper", f"{a} / {b}", depth, f"{len(points)} Dreiecke"))
+            out += sorted(found, key=lambda f: -f.depth)
             folds: dict[str, int] = {}
             for e, f in new:
                 a = self.vertex_part[self.edges[e, 0]]
@@ -191,6 +205,21 @@ class Checker:
                 if n >= 3:
                     out.append(Finding("falte", part, float(n)))
         return out
+
+    def _sink(self, vertices, normals, part: str, other: str, near: np.ndarray, radius: float = 0.06) -> float:
+        """Wie tief Punkte von part (nahe der Schnittstelle) unter der Haut von other liegen."""
+        from scipy.spatial import cKDTree
+
+        mine = np.flatnonzero(self.vertex_part == part)
+        theirs = np.flatnonzero(self.vertex_part == other)
+        close = cKDTree(near).query(vertices[mine], distance_upper_bound=radius)[0] < np.inf
+        mine = mine[close]
+        if len(mine) == 0 or len(theirs) == 0:
+            return 0.0
+        _, k = cKDTree(vertices[theirs]).query(vertices[mine])
+        nearest = theirs[k]
+        signed = np.einsum("ij,ij->i", vertices[mine] - vertices[nearest], normals[nearest])
+        return float(max(0.0, -signed.min()))
 
     def _grouped(self, kind: str, mask: np.ndarray, depth: np.ndarray, detail: str = "") -> list[Finding]:
         out = []
@@ -234,7 +263,7 @@ def summarize(findings_per_frame: list[list[Finding]], fps: float = 30.0) -> lis
     lines = []
     for (kind, where), (first, last, worst, n) in sorted(agg.items()):
         when = f"{first / fps:.2f}–{last / fps:.2f} s, {n} Bilder"
-        if kind in ("boden", "geraet"):
+        if kind in ("boden", "geraet", "koerper"):
             lines.append(f"{kind}: {where} bis {worst * 1000:.0f} mm tief ({when})")
         else:
             lines.append(f"{kind}: {where}, bis {worst:.0f} Dreiecke ({when})")
