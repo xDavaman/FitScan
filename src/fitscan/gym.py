@@ -291,7 +291,8 @@ def deadlift(fig: P.Figure, reps: int = 2) -> Exercise:
     grips = _grips(fig, BAR_RADIUS)
     palms = {s: np.array([0, 1.0, 0]) for s in P.SIDES}
     setup_x, setup = deadlift_setup(fig, grips)
-    top = deadlift_pose(-3, 0, 2, arms_fwd=20)  # aufrecht, Schultern zurück, Arme vor den Oberschenkeln
+    top = deadlift_pose(-3, 0, 2, arms_fwd=20)
+  # aufrecht, Schultern zurück, Arme vor den Oberschenkeln
     stand = standing()
     reach = deadlift_pose(*setup_x)
     keys = [(0.0, stand), (0.4, stand)]
@@ -391,7 +392,7 @@ def curl(fig: P.Figure, reps: int = 3) -> Exercise:
     def arms(elbow: float, fwd: float) -> dict:
         return P.pose(standing(), arms=dict(down=24, out=0, fwd=fwd, elbow=elbow))
 
-    bottom, top = arms(8, 2), arms(135, 14)
+    bottom, top = arms(8, 2), arms(128, 14)
     keys = [(0.0, bottom), (0.6, bottom)]
     t = 0.6
     for _ in range(reps):
@@ -428,7 +429,7 @@ def pullup(fig: P.Figure, reps: int = 2, clearance: float = 0.12) -> Exercise:
         return P.pose(None, arms=dict(down=down, fwd=fwd, elbow=elbow), legs=legs,
                       spine=dict(bend=bend, neck=neck), shoulders=dict(up=12 - elbow * 0.12))
 
-    low, high = hang(-122, 0), hang(-58, 118, fwd=12, bend=-6, neck=-12)
+    low, high = hang(-122, 0), hang(-58, 110, fwd=12, bend=-6, neck=-12)
     keys = [(0.0, low), (0.8, low)]
     t = 0.8
     for _ in range(reps):
@@ -455,3 +456,29 @@ def pullup(fig: P.Figure, reps: int = 2, clearance: float = 0.12) -> Exercise:
     ex = Exercise("Klimmzug", FPS, frames, root, [(pullup_bar(), world)], attachments, contacts,
                   [(0.0, times[-1] + 1, "Klimmzug im Obergriff, Kinn über die Stange")])
     return _finish(fig, ex, frames, root)
+
+
+def preview(fig: P.Figure, ex: Exercise, glb, video, still=None, camera=(2.6, -3.0, 0.6)) -> None:
+    """Vorschauvideo mit Haut über Blender (nur als externes Programm)."""
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from .blender import find_blender
+
+    cyl = np.array([[np.concatenate([s.centre, s.axis * s.half_length, [s.radius]])
+                     for prop, mats in ex.props for s in prop.placed(mats[i])] for i in range(len(ex.rotations))])
+    n = len(ex.rotations)
+    with tempfile.TemporaryDirectory() as tmp:
+        data = Path(tmp) / "uebung.npz"
+        np.savez(data, vertices=ex.vertices.astype(np.float32), rest=fig._rest_v[0].numpy(), cylinders=cyl,
+                 fps=ex.fps, captions=np.array(ex.captions, dtype=object), stills=[n // 6, n // 3, n // 2],
+                 camera=np.array(camera))
+        script = Path(__file__).with_name("blender_preview.py")
+        blender = find_blender()
+        if blender is None:
+            raise RuntimeError("Blender nicht gefunden.")
+        args = [str(blender), "-b", "-P", str(script), "--", str(glb), str(data), str(video)]
+        if still:
+            args.append(str(still))
+        subprocess.run(args, check=True, capture_output=True)
