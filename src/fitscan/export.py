@@ -91,6 +91,8 @@ class RiggedMesh:
     face_uv: np.ndarray | None = None  # (F, 3)
     eyes: np.ndarray | None = None  # eigenes Bild der Augäpfel (texture.eye_layout), eigenes Material
     eye_faces: np.ndarray | None = None  # (F,) bool: Dreiecke der Augäpfel
+    relief: np.ndarray | None = None  # Normal Map der Haut (H, W, 3) uint8, Tangentenraum (material.py)
+    roughness: np.ndarray | None = None  # Rauheit der Haut (H, W) uint8, 255 = matt
 
     def split_at_seams(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Für GLB: (Punkt, UV)-Paare. Gibt Punktindex je neuem Punkt, dessen UV (glTF: v nach
@@ -117,7 +119,8 @@ def top4_weights(indices: np.ndarray, weights: np.ndarray) -> tuple[np.ndarray, 
 
 
 def build_rig(model: BodyModel, params: BodyParams, preset: str = "anny",
-              morphs: bool = True, skin: np.ndarray | None = None, eyes: np.ndarray | None = None) -> RiggedMesh:
+              morphs: bool = True, skin: np.ndarray | None = None, eyes: np.ndarray | None = None,
+              relief: np.ndarray | None = None, roughness: np.ndarray | None = None) -> RiggedMesh:
     if params.offsets is not None:
         from .fit import repair_offsets
 
@@ -172,6 +175,7 @@ def build_rig(model: BodyModel, params: BodyParams, preset: str = "anny",
         face_uv = model.anny.face_texture_coordinate_indices.detach().cpu().numpy().astype(np.int64)
     return RiggedMesh(
         skin=skin, uv=uv, face_uv=face_uv, eyes=eyes if eye_faces is not None else None, eye_faces=eye_faces,
+        relief=relief if skin is not None else None, roughness=roughness if skin is not None else None,
         vertices=v_y.astype(np.float32),
         normals=vertex_normals(v_y, model.faces).astype(np.float32),
         faces=model.faces.astype(np.uint32),
@@ -322,6 +326,16 @@ def write_glb(rig: RiggedMesh, path: Path, name: str = "FitScan",
             materials.append({"name": "Augen", "pbrMetallicRoughness": {
                 "baseColorFactor": [1.0, 1.0, 1.0, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.25,
                 "baseColorTexture": {"index": 1}}})
+        if rig.relief is not None:
+            material["normalTexture"] = {"index": len(images)}
+            images.append(("Haut_Relief", rig.relief))
+        if rig.roughness is not None:
+            # glTF: Rauheit im Grünkanal, Metall im Blaukanal (Haut: kein Metall)
+            mr = np.zeros((*rig.roughness.shape, 3), np.uint8)
+            mr[..., 1] = rig.roughness
+            material["pbrMetallicRoughness"]["roughnessFactor"] = 1.0
+            material["pbrMetallicRoughness"]["metallicRoughnessTexture"] = {"index": len(images)}
+            images.append(("Haut_Glanz", mr))
         extra = {
             "images": [{"name": n, "bufferView": buf.add_bytes(encode_skin(img)), "mimeType": "image/jpeg"}
                        for n, img in images],
@@ -455,13 +469,15 @@ def cascadeur_check(rig: RiggedMesh) -> list[str]:
 
 def export_body(model: BodyModel, params: BodyParams, folder: Path, name: str = "koerper",
                 presets: tuple[str, ...] = PRESETS, obj: bool = True,
-                skin: np.ndarray | None = None, eyes: np.ndarray | None = None) -> dict[str, Path | list[str]]:
+                skin: np.ndarray | None = None, eyes: np.ndarray | None = None,
+                relief: np.ndarray | None = None, roughness: np.ndarray | None = None) -> dict[str, Path | list[str]]:
     """Schreibt GLB je Namensschema und OBJ in einen Ordner. Gibt Pfade und Prüfhinweise zurück.
-    eyes: eigenes Bild der Augäpfel (nur zusammen mit skin)."""
+    eyes: eigenes Bild der Augäpfel (nur zusammen mit skin). relief, roughness: Normal Map und
+    Rauheit der Haut (material.skin_material), nur zusammen mit skin."""
     folder = Path(folder)
     out: dict[str, Path | list[str]] = {}
     for preset in presets:
-        rig = build_rig(model, params, preset=preset, skin=skin, eyes=eyes)
+        rig = build_rig(model, params, preset=preset, skin=skin, eyes=eyes, relief=relief, roughness=roughness)
         if not rig.report.ok:
             raise ValueError(rig.report.summary())
         suffix = "" if preset == "anny" else f"_{preset}"

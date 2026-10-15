@@ -33,6 +33,7 @@ Technischer Plan: https://claude.ai/code/artifact/e834733a-d72b-4a65-bdea-881002
 | `video.py` | Video/Fotos einlesen (iPhone-HDR/HLG über PyAV selbst nach sRGB), prüfen, bestes Bild pro Blickwinkel wählen |
 | `head.py` | Kopfaufnahme: Gesichtspunkte (MediaPipe Face Landmarker), Bündelausgleich, Kopf verformen (Gesicht, Schädel, Ohren), Kopf-Hautbild, Augen zeichnen |
 | `texture.py` | Hautbild: UV-Karte, Sichtbarkeit je Bild, Farben in zwei Lagen mischen, Lücken füllen, Feinausrichtung per optischem Fluss, Vorschau-Rendering |
+| `material.py` | Hautmaterial: Umgebungsverdeckung (AO), Raumlicht robust herausrechnen (Körper/Kopf getrennt), Relief als Normal Map (glTF, grün = oben), Glanz-Karte; Blender ergänzt Subsurface |
 | `mesh_check.py` | wasserdicht, Orientierung, kaputte oder umgeklappte Dreiecke |
 | `export.py` | eigener GLB-Exporter (Skelett, Gewichte, Formregler), OBJ, Cascadeur-Prüfung, Namensschemata |
 | `blender.py`, `blender_glb_to_fbx.py` | optional FBX/.blend über installiertes Blender |

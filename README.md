@@ -60,6 +60,9 @@ Jeder Scan landet in `daten/personen/<name>/scans/<datum>/`:
 | `koerper_unreal.glb` | dasselbe mit Knochennamen im Unreal-Stil (`upperarm_l`) – für Cascadeur, Unreal, Unity |
 | `koerper.obj` | nur das Netz (z. B. für 3D-Druck oder Bildhauerprogramme), mit `.mtl` und Hautbild |
 | `haut.jpg` | Hautbild aus dem Video (Hautton, Tattoos, Muttermale, Kleidung) auf Annys UV-Karte, 4096 × 4096 |
+| `haut_farbe.jpg` | Hautfarbe ohne das Raumlicht der Aufnahme; diese Farbe tragen GLB, FBX und OBJ (`koerper_haut.jpg`) |
+| `haut_relief.jpg`, `haut_glanz.jpg` | Relief der Haut (Normal Map) und Glanz (Roughness, hell = matt), stecken in GLB und FBX |
+| `hautmaterial.json` | wie viel Raumlicht herausgerechnet wurde (Körper, Kopf) |
 | `ansichten.json` | Lage und Haltung des Körpers in jedem verwendeten Videobild |
 | `feinform.json` | Feinform: Abstand der Modellränder zum Umriss im Video vorher/nachher, Verschiebung je Körperbereich |
 | `kopf.json`, `kopfvergleich.jpg` | nur mit Kopfaufnahme: Gesichtsmaße, Passgenauigkeit, Foto und Modell nebeneinander |
@@ -87,11 +90,25 @@ Beinen), dann werden die Farben auf die Körperoberfläche übertragen. Ein zwei
 jedes Bild per optischem Fluss nach, damit Tattoos und Schrift aus allen Bildern genau
 übereinanderliegen. Feinheiten kommen aus den schärfsten, frontalsten Bildern, die Grundfarbe aus
 vielen. Nie gesehene Stellen (Fußsohlen, Achseln) werden aus der Umgebung aufgefüllt. Das Licht der
-Aufnahme steckt im Hautbild; ein Farbstich des Lichts wird an hellen, farblosen Flächen im Hintergrund
-(weiße Wand) gemessen und herausgerechnet. iPhone-Videos in HDR (Standard bei neueren iPhones)
+Aufnahme steckt in `haut.jpg`; ein Farbstich des Lichts wird an hellen, farblosen Flächen im Hintergrund
+(weiße Wand) gemessen und herausgerechnet, Helligkeit und Schatten übernimmt das Hautmaterial.
+iPhone-Videos in HDR (Standard bei neueren iPhones)
 werden in voller Farbtiefe gelesen und auf normale Helligkeit umgerechnet; sonst wären helle Haut
 und Wände überstrahlt und Augenbrauen, Poren und Fältchen gingen verloren. Ohne Hautbild (schneller):
 Häkchen in der Oberfläche entfernen oder `--ohne-hautbild`.
+
+**Hautmaterial:** Aus dem Hautbild werden drei Bilder für ein Material, das wie Haut auf Licht
+reagiert. *Farbe:* Für jeden Punkt der Oberfläche wird geschätzt, wie viel Raumlicht er abbekommen hat
+(Richtung der Fläche, wie offen sie liegt; Achseln, Schritt und Kinnunterseite sehen wenig vom Raum).
+Diese Schattierung wird für Körper und Kopf getrennt robust angepasst und herausgeteilt, Tattoos und
+Kleidung zählen dabei nicht mit. *Relief:* Feine Helligkeitsunterschiede der Haut (1,5 bis 40 mm,
+Muskelränder, Falten, Bauchnabel) werden als Höhe gedeutet, dazu feine Poren; Tattoos, Schrift und
+Muttermale bleiben flach. Daraus entsteht eine Normal Map (glTF-Konvention), das Netz bleibt
+unverändert. *Glanz:* Haut seidig, Gesicht etwas glänzender, Kleidung matt. In `koerper.blend` kommt
+Subsurface Scattering dazu (Licht dringt einige Millimeter ein). Grenze: Das Relief ist aus Licht
+und Schatten geschätzt, nicht gemessen; Lichtreste, die nicht zur Form passen (Streifen an Seiten
+der Beine), bleiben. Beim ersten Export dauert das etwa zwei Minuten, danach liegen die Bilder im
+Scanordner.
 
 **Kopf:** Mit Kopfaufnahme sucht MediaPipe Face Landmarker (Apache 2.0) in jedem Bild 478
 Gesichtspunkte. Ein Bündelausgleich über alle Bilder ergibt daraus die Gesichtsform und die Kopflage

@@ -121,9 +121,44 @@ def best_recording(recordings: list[Recording], log: Log | None = None) -> Recor
     return best
 
 
+MAP_FILES = ("haut_farbe.jpg", "haut_relief.jpg", "haut_glanz.jpg")
+
+
+def skin_maps(model: BodyModel, params: BodyParams, skin: np.ndarray, folder: Path,
+              log: Log | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Hautmaterial zum Hautbild (material.py): Farbe ohne Raumlicht, Relief, Glanz. Liegen die
+    Bilder schon im Ordner und sind neuer als haut.jpg, werden sie wiederverwendet."""
+    from . import head as H
+    from .export import build_rig
+    from .material import skin_material
+
+    folder = Path(folder)
+    paths = [folder / f for f in MAP_FILES]
+    source = folder / "haut.jpg"
+    if all(p.exists() for p in paths) and (not source.exists() or
+                                           min(p.stat().st_mtime for p in paths) >= source.stat().st_mtime):
+        albedo, relief = _read_rgb(paths[0]), _read_rgb(paths[1])
+        return albedo, relief, cv2.imread(str(paths[2]), cv2.IMREAD_GRAYSCALE)
+    (log or _noop)("Hautmaterial: Raumlicht herausrechnen, Relief und Glanz")
+    rig = build_rig(model, params, morphs=False)
+    mat = skin_material(model, rig.vertices, rig.faces, skin, head=H.head_region(model), log=log)
+    folder.mkdir(parents=True, exist_ok=True)
+    for path, img in zip(paths, (mat.albedo, mat.normal), strict=False):
+        cv2.imwrite(str(path), cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 95])
+    cv2.imwrite(str(paths[2]), mat.roughness, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    (folder / "hautmaterial.json").write_text(json.dumps(mat.report, indent=2), "utf-8")
+    return mat.albedo, mat.normal, mat.roughness
+
+
 def _export(model: BodyModel, params: BodyParams, folder: Path, presets,
-            skin: np.ndarray | None = None, eyes: np.ndarray | None = None) -> tuple[dict[str, str], list[str]]:
-    out = export_body(model, params, folder, presets=presets, skin=skin, eyes=eyes)
+            skin: np.ndarray | None = None, eyes: np.ndarray | None = None, maps: Path | None = None,
+            log: Log | None = None) -> tuple[dict[str, str], list[str]]:
+    """maps: Ordner mit haut.jpg, in dem das Hautmaterial liegt bzw. abgelegt wird (Standard: folder)."""
+    relief = roughness = None
+    if skin is not None:
+        skin, relief, roughness = skin_maps(model, params, skin, maps or folder, log=log)
+    out = export_body(model, params, folder, presets=presets, skin=skin, eyes=eyes, relief=relief,
+                      roughness=roughness)
     hints = list(out.pop("hinweise", []))
     return {k: str(v) for k, v in out.items()}, hints
 
@@ -224,7 +259,7 @@ def scan(source: Path | list[Path], person: Person, name: str, store: Store | No
     if head_video:
         params, skin, eyes, quality["kopf"] = head_stage(model, params, Path(head_video), skin, folder,
                                                          texture=texture, log=log)
-    files, hints = _export(model, params, folder, presets, skin, eyes)
+    files, hints = _export(model, params, folder, presets, skin, eyes, log=log)
     record = store.save_scan(rec.id, folder, params, person.measures, measures, quality,
                              ("video" if is_video else "bilder") + ("+kopf" if head_video else ""), files)
     (folder / "bilder.json").write_text(json.dumps(quality["bilder"], indent=2), "utf-8")
@@ -541,7 +576,7 @@ def add_head(record: ScanRecord, video: Path, store: Store | None = None, preset
                 white = video_white(sources[0])
     folder = store.new_scan_folder(record.person_id)
     params, skin, eyes, info = head_stage(model, params, video, skin, folder, body_white=white, log=log)
-    files, hints = _export(model, params, folder, presets, skin, eyes)
+    files, hints = _export(model, params, folder, presets, skin, eyes, log=log)
     quality = {**record.quality, "kopf": info, "kopfvideo": str(video), "aus_scan": record.id}
     new = store.save_scan(record.person_id, folder, params, record.inputs, record.measures, quality,
                           record.source.split("+")[0] + "+kopf", files)
@@ -562,7 +597,7 @@ def reexport(record: ScanRecord, presets: tuple[str, ...] = PRESETS, device: str
         suffix = "_" + "_".join(f"{k}{v:.2f}" for k, v in changes.items())
     skin, eyes = (_read_rgb(record.folder / f) for f in ("haut.jpg", "augen.jpg"))
     files, hints = _export(model, params, record.folder / f"export{suffix}", presets, skin,
-                           eyes if skin is not None else None)
+                           eyes if skin is not None else None, maps=record.folder, log=log)
     for h in hints:
         log(h)
     return files

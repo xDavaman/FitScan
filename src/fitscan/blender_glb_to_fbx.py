@@ -49,6 +49,28 @@ def show_textures(meshes: list) -> None:
     scene.view_settings.view_transform = "Standard"
 
 
+def skin_shader() -> None:
+    """Haut leicht durchscheinend (Subsurface Scattering), wie echte Haut: Licht dringt ein paar
+    Millimeter ein und kommt rötlich wieder heraus. glTF kennt das nicht, deshalb erst hier.
+    Normal Map und Rauheit kommen schon aus der GLB."""
+    for mat in bpy.data.materials:
+        if not mat.use_nodes or not mat.name.startswith("Haut"):
+            continue
+        for node in mat.node_tree.nodes:
+            if node.type != "BSDF_PRINCIPLED":
+                continue
+            inputs = node.inputs
+            if "Subsurface Weight" in inputs:  # Blender 4 und neuer
+                inputs["Subsurface Weight"].default_value = 0.2
+                inputs["Subsurface Scale"].default_value = 0.012  # Meter
+            elif "Subsurface" in inputs:  # Blender 3
+                inputs["Subsurface"].default_value = 0.012
+            if "Subsurface Radius" in inputs:
+                inputs["Subsurface Radius"].default_value = (1.0, 0.35, 0.2)
+        if hasattr(mat, "use_sss_translucency"):
+            mat.use_sss_translucency = True
+
+
 def convert(src: str, dst: str) -> dict:
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.import_scene.gltf(filepath=src, bone_heuristic="TEMPERANCE", merge_vertices=True)
@@ -83,6 +105,7 @@ def convert(src: str, dst: str) -> dict:
             embed_textures=True,
         )
     elif dst.lower().endswith(".blend"):
+        skin_shader()
         show_textures(meshes)
         bpy.ops.file.pack_all()
         bpy.ops.wm.save_as_mainfile(filepath=dst)
