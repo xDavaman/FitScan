@@ -591,7 +591,7 @@ def make_scene(arm_obj, mesh, frames, offsets, captions):
     return cam
 
 
-def add_captions(cam, captions, size: float = 0.05, pos=(-0.30, 0.15, -1.0)):
+def add_captions(cam, captions, size: float = 0.05, pos=(-0.30, 0.15, -1.0), center: bool = False):
     mat = bpy.data.materials.get("Schrift") or bpy.data.materials.new("Schrift")
     mat.use_nodes = True
     em = mat.node_tree.nodes.new("ShaderNodeEmission")
@@ -604,6 +604,8 @@ def add_captions(cam, captions, size: float = 0.05, pos=(-0.30, 0.15, -1.0)):
         curve = bpy.data.curves.new(f"Text{i}", "FONT")
         curve.body = text
         curve.size = size
+        if center:
+            curve.align_x = "CENTER"
         obj = bpy.data.objects.new(f"Beschriftung {i}", curve)
         obj.data.materials.append(mat)
         bpy.context.scene.collection.objects.link(obj)
@@ -665,7 +667,8 @@ def face_demo(arm_obj, mesh, out_dir: str, render: bool) -> dict:
         if o.name.startswith("Beschriftung"):
             o.animation_data_clear()
             o.hide_render = True
-    add_captions(cam, captions, size=0.022, pos=(-0.17, -0.08, -0.5))
+    # 85 mm in 0,5 m Abstand: das Bild ist nur gut 20 cm breit, die Schrift also klein und mittig
+    add_captions(cam, captions, size=0.0075, pos=(0.0, -0.088, -0.5), center=True)
     light = bpy.data.objects.new("Gesichtslicht", bpy.data.lights.new("Gesichtslicht", "AREA"))
     light.data.energy = 18
     light.data.size = 0.8
@@ -673,7 +676,7 @@ def face_demo(arm_obj, mesh, out_dir: str, render: bool) -> dict:
     light.rotation_euler = (head - light.location).to_track_quat("-Z", "Y").to_euler()
     scene.collection.objects.link(light)
     shape_keys.animation_data.action = action
-    render_video(os.path.join(out_dir, "mimik_regler.mp4"), 0, int(end * FPS), size=(720, 720))
+    render_video(os.path.join(out_dir, "mimik_regler.mp4"), 0, int(end * FPS), size=(600, 600))
     return info
 
 
