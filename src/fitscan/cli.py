@@ -113,6 +113,19 @@ def main(argv: list[str] | None = None) -> None:
     p_anim.add_argument("glb", type=Path, help="exportiertes koerper_unreal.glb oder koerper.glb")
     p_anim.add_argument("ziel", type=Path, help="Ausgabeordner")
     p_anim.add_argument("--ohne-video", action="store_true", help="keine Vorschauvideos rendern")
+    p_vid = sub.add_parser("video-bewegung", aliases=["uebertragen"],
+                           help="Bewegung aus einem Video (auch mit Schnitten) auf das eigene Modell übertragen")
+    p_vid.add_argument("video", type=Path, help="Video mit der Bewegung (Handy, Trainingsvideo, Animation)")
+    p_vid.add_argument("glb", type=Path, help="eigenes Modell, z. B. koerper.glb oder koerper_unreal.glb")
+    p_vid.add_argument("ziel", type=Path, help="Ausgabeordner")
+    p_vid.add_argument("--groesse", type=float, help="Körpergröße in cm (nur ohne params.json neben dem Modell)")
+    p_vid.add_argument("--gewicht", type=float, help="Gewicht in kg (nur ohne params.json neben dem Modell)")
+    p_vid.add_argument("--szenen", type=int, default=6, help="höchstens so viele Szenen auslesen")
+    p_vid.add_argument("--namen", help="Namen der Szenen, mit Komma getrennt (z. B. Seitheben,Schraegbank)")
+    p_vid.add_argument("--mit-drehung", action="store_true",
+                       help="langsame Drehungen behalten (sonst gelten sie als Kamerafahrt)")
+    p_vid.add_argument("--ohne-puppe", action="store_true", help="keine muskulöse Puppe wie im Trainingsvideo")
+    p_vid.add_argument("--ohne-video", action="store_true", help="keine Vorschau, kein .blend, keine FBX")
     p_test = sub.add_parser("selbsttest", aliases=["selftest"], help="Testkörper filmen und anpassen")
     p_test.add_argument("--schnell", action="store_true")
 
@@ -195,6 +208,14 @@ def main(argv: list[str] | None = None) -> None:
         for k, v in info["dateien"].items():
             print(f"  {k:12s} {v}")
         print(f"  {len(info['gesichtsregler'])} Gesichtsregler, {info['dauer_s']} s Bewegung")
+    elif cmd in ("video-bewegung", "uebertragen"):
+        from .video_motion import transfer
+
+        info = transfer(args.video, args.glb, args.ziel, args.groesse, args.gewicht, max_shots=args.szenen,
+                        names=args.namen.split(",") if args.namen else None, steady=not args.mit_drehung,
+                        render=not args.ohne_video, mannequin=not args.ohne_puppe)
+        print((args.ziel / "bericht.txt").read_text("utf-8"))
+        print("Dateien: " + ", ".join(info["dateien"]))
     elif cmd in ("selbsttest", "selftest"):
         from .selftest import run
 
