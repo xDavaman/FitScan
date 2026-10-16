@@ -534,7 +534,8 @@ def make_plausible(model: BodyModel, params: BodyParams, cap: mocap.Capture, nam
     motion, _ = limit_joints(model, params, motion)  # Glätten kann knapp über die Grenze schieben
     log(f"{name}: Füße auf den Boden")
     pb = M.play(model, params, motion)
-    contacts = M.detect_contacts(model, pb, motion.fps)
+    # Fremde Videos zittern in der Tiefe: Fußgeschwindigkeit großzügiger als bei eigenen Aufnahmen
+    contacts = M.detect_contacts(model, pb, motion.fps, height=0.08, speed=0.8)
     motion = M.fix_ground(model, params, motion, contacts)
     pb = M.play(model, params, motion)
     support = find_support(model, pb.vertices, pb.bones)

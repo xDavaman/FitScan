@@ -11,7 +11,7 @@ Ausgabe im Ordner:
   Figur, dunkelblaues Studio, schwarze Matte; die Haut aus dem Scan bleibt als Material „Haut“ in
   der Datei und kann im Materialfeld zurückgestellt werden.
 - modell_bewegt.fbx: Modell mit allen Bewegungen (eine Aufnahme je Bewegung) für Cascadeur/Unreal.
-- vorschau.mp4 (hochkant 720×1280) und je Bewegung ein Standbild.
+- vorschau.mp4 (hochkant 540×960) und je Bewegung ein Standbild.
 Blender ist GPL und wird nur als Programm aufgerufen.
 """
 
@@ -193,14 +193,14 @@ def main(argv):
     follow_camera(sc, arm, root_bone, total)
     sc.render.engine = "BLENDER_EEVEE"
     ee = sc.eevee
-    ee.taa_render_samples = 32
+    ee.taa_render_samples = 12
     for attr in ("use_gtao", "use_ssr", "use_soft_shadows"):
         if hasattr(ee, attr):
             setattr(ee, attr, True)
     if hasattr(ee, "use_bloom"):
         ee.use_bloom = True
         ee.bloom_threshold, ee.bloom_intensity = 1.2, 0.03
-    sc.render.resolution_x, sc.render.resolution_y = 720, 1280
+    sc.render.resolution_x, sc.render.resolution_y = 540, 960
     sc.view_settings.view_transform = "Filmic" if "Filmic" in [
         e.identifier for e in sc.view_settings.bl_rna.properties["view_transform"].enum_items] else "Standard"
     sc.view_settings.look = "None"
