@@ -429,7 +429,7 @@ def pullup(fig: P.Figure, reps: int = 2, clearance: float = 0.12) -> Exercise:
         return P.pose(None, arms=dict(down=down, fwd=fwd, elbow=elbow), legs=legs,
                       spine=dict(bend=bend, neck=neck), shoulders=dict(up=12 - elbow * 0.12))
 
-    low, high = hang(-122, 0), hang(-58, 110, fwd=12, bend=-6, neck=-12)
+    low, high = hang(-122, 0), hang(10, 135, bend=-10, neck=-20)
     keys = [(0.0, low), (0.8, low)]
     t = 0.8
     for _ in range(reps):
