@@ -151,9 +151,17 @@ def main(argv):
     arm = next(o for o in sc.objects if o.type == "ARMATURE")
     meshes = [o for o in sc.objects if o.type == "MESH"]
     actions = [a for a in bpy.data.actions if a.name.split("_")[0] != "" and a.users >= 0]
-    # glTF-Import: Aktionen heißen wie die Animationen (bei Blender 4.0 mit Objektnamen dahinter)
-    actions = sorted(actions, key=lambda a: a.name)
-    names = {a.name: a.name.rsplit("_", 1)[0] if a.name.count("_") >= 2 else a.name for a in actions}
+    # glTF-Import: Aktionen heißen wie die Animationen (bei Blender 4.0 mit Objektnamen dahinter).
+    # Bewegungsnamen aus FitScan, längster passender zuerst ("Stehen_2" nicht als "Stehen" lesen).
+    motions = sorted(spec.get("motions") or spec["furniture"], key=len, reverse=True)
+
+    def motion_of(action):
+        return next((m for m in motions if action == m or action.startswith(m + "_")), action)
+
+    order = list(spec.get("motions") or [])
+    names = {a.name: motion_of(a.name) for a in actions}
+    actions = sorted(actions, key=lambda a: (order.index(names[a.name]) if names[a.name] in order else len(order),
+                                             a.name))
     if arm.animation_data is None:
         arm.animation_data_create()
     ad = arm.animation_data
@@ -170,8 +178,7 @@ def main(argv):
         strip = track.strips.new(a.name, start, a)
         strip.extrapolation = "NOTHING"
         length = int(round(hi - lo))
-        key = next((k for k in spec["furniture"] if a.name.startswith(k)), names[a.name])
-        ranges[key] = (start, start + length)
+        ranges[names[a.name]] = (start, start + length)
         start += length + GAP
     total = max(start - GAP, 1)
     sc.frame_start, sc.frame_end = 0, total

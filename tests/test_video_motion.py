@@ -173,7 +173,7 @@ def test_mannequin_has_smooth_head_and_exports(model, tmp_path):
     moved = np.linalg.norm(pp.offsets, axis=1) > 0.002
     rest = M._rest(model, BodyParams(phenotype=pp.phenotype, scale=pp.scale))["_unscaled_vertices"][0].numpy()
     head_z = float(M._rest(model, pp)["bone_heads"][0, model.bone("head"), 2]) / pp.scale
-    assert moved.sum() > 1000 and rest[moved, 2].min() > head_z - 0.1  # nur Kopf und Kinn
+    assert moved.sum() > 1000 and rest[moved, 2].min() > head_z - 0.12  # nur Kopf, Kinn, Halsansatz
     path = V.export_puppet(model, pp, [M.demo_walk(seconds=0.5)], tmp_path / "puppe.glb")
     js, _ = _read_glb(path)
     assert [a["name"] for a in js["animations"]] == ["Testgang"]

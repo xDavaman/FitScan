@@ -379,8 +379,17 @@ def find_support(model: BodyModel, vertices: np.ndarray, bones: np.ndarray) -> l
         return []  # steht, kniet oder liegt am Boden
     seat_pts = v[pelvis][v[pelvis, 2] < seat_z + 0.05]
     centre = seat_pts.mean(0)
-    boxes = [contact.Box("Bank", np.array([centre[0], centre[1], (seat_z - 0.005) / 2]), np.eye(3),
-                         np.array([0.15, 0.22, (seat_z - 0.005) / 2]))]
+    # Sitzfläche so hoch, wie es der Körper in jedem Bild zulässt: tiefster Punkt über der Fläche
+    # (Gesäß, Oberschenkel, herabhängende Beine) über die ganze Szene; die Bank reicht nach hinten
+    half = np.array([0.15, 0.2])
+    mid = centre[:2] + np.array([0.0, 0.08])
+    inside = np.all(np.abs(vertices[..., :2] - mid) < half, axis=-1)
+    lows = [float(np.percentile(f[m, 2], 1)) for f, m in zip(vertices, inside, strict=True) if m.sum() > 20]
+    seat_z = min(seat_z, min(lows)) if lows else seat_z
+    if seat_z < 0.15:
+        return []
+    boxes = [contact.Box("Bank", np.array([mid[0], mid[1], (seat_z - 0.005) / 2]), np.eye(3),
+                         np.array([half[0], half[1], (seat_z - 0.005) / 2]))]
     # Rückenlehne: Linie vom Gesäß zu den Schulterblättern (hinterste Rückenpunkte)
     bpts = v[back]
     shoulder = bpts[np.argmax(bpts[:, 1])]  # Blick -Y: hinten = +Y
@@ -663,8 +672,6 @@ def mannequin_params(model: BodyModel, params: BodyParams, muscle: float = 1.0, 
     puppet = BodyParams(phenotype=phen, local={}, scale=params.scale)
     rest = M._rest(model, puppet)
     v = rest["_unscaled_vertices"][0].detach().cpu().numpy().astype(np.float64)
-    labels = model.bone_labels
-    idx, w = model.vertex_bone_indices, model.vertex_bone_weights
     # Kopf geometrisch: alles über dem Kopfgelenk; Augäpfel, Zähne, Zunge sind eigene Netzteile
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
@@ -674,29 +681,37 @@ def mannequin_params(model: BodyModel, params: BodyParams, muscle: float = 1.0, 
     _, comp = connected_components(coo_matrix((np.ones(len(e)), (e[:, 0], e[:, 1])), shape=(len(v), len(v))))
     main = comp == np.bincount(comp).argmax()
     head = v[:, 2] > head_z - 0.03
-    inner = head & ~main
-    jaw = (v[:, 2] > head_z - 0.09) & (v[:, 1] < np.median(v[head & main, 1]) - 0.02)  # Kinn und Lippen
-    neck_w = np.zeros(len(v))
-    for k, name in enumerate(labels):
-        if name.startswith("neck"):
-            neck_w += np.where(idx == k, w, 0).sum(1)
+    inner = ~main & (v[:, 2] > head_z - 0.15)  # Augen, Zähne, Zunge (Zähne liegen tiefer als das Kopfgelenk)
     # Kopf als glattes Ei wie bei einer Schaufensterpuppe: jeden Kopfpunkt vom Mittelpunkt aus auf
-    # ein Ellipsoid schieben, zum Hals hin weich überblenden, danach etwas glätten
-    hv = v[head & ~inner]
+    # ein Ellipsoid schieben, unterhalb einer schrägen Linie Kinn → Schädelansatz weich in den Hals
+    # überblenden, danach glätten
+    hv = v[head & main]
     lo, hi = np.percentile(hv, 3, axis=0), np.percentile(hv, 97, axis=0)
     centre = np.array([(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2 + 0.01, lo[2] + 0.55 * (hi[2] - lo[2])])
     radii = np.array([(hi[0] - lo[0]) * 0.47, (hi[1] - lo[1]) * 0.42, hv[:, 2].max() - centre[2]])
-    chin = np.percentile(hv[:, 2], 3)
-    blend = np.clip((v[:, 2] - chin + 0.04) / 0.06, 0, 1) * (1 - np.clip(neck_w / 0.6, 0, 1))
+    face = main & (np.abs(v[:, 0]) < 0.02) & (v[:, 2] > head_z - 0.12) & (v[:, 1] < centre[1] - 0.75 * radii[1])
+    chin = v[face][np.argmin(v[face, 2])]  # Kinnspitze
+    back_y = centre[1] + radii[1]
+    slope = (head_z - 0.01 - chin[2]) / (back_y - chin[1])
+    above = v[:, 2] - (chin[2] + (v[:, 1] - chin[1]) * slope)  # Abstand über der Linie Kinn → Nacken
+    above = np.where(v[:, 2] > chin[2] - 0.04, above, -1.0)  # Brust vor dem Kinn bleibt
+    blend = np.clip((above + 0.04) / 0.035, 0, 1) * main  # Kinn ganz drin, darunter Hals
     blend = blend * blend * (3 - 2 * blend)
-    blend = np.where(jaw & (neck_w < 0.3), np.maximum(blend, 0.85), blend)
-    smooth_sel = (head | jaw) & ~inner
-    sel = smooth_sel & (blend > 0)
-    edges = contact._edges(model.faces)
-    deg = np.bincount(edges.ravel(), minlength=len(v)).astype(np.float64)
+
     def shell(x):
         d = (x - centre) / radii
         return centre + (x - centre) / np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-9)
+
+    # Mundraum (Tasche hinter den Lippen, hängt am Körpernetz): liegt tief im Kopf. Auf die Eiform
+    # geschoben läge er doppelt über den Lippen und das Netz knüllt sich; er wandert deshalb nach innen.
+    depth = np.linalg.norm((v - centre) / radii, axis=1)
+    cavity = main & (above > 0) & (depth < 0.8) & (v[:, 2] < centre[2] - 0.2 * radii[2])
+    inner = inner | cavity
+    smooth_sel = (above > -0.07) & main & ~inner
+    sel = smooth_sel & (blend > 0)
+    edges = contact._edges(model.faces)
+    edges = edges[~inner[edges].any(1)]  # beim Glätten nur Nachbarn auf der Oberfläche
+    deg = np.bincount(edges.ravel(), minlength=len(v)).astype(np.float64)
 
     target = v.copy()
     target[sel] = v[sel] + blend[sel, None] * (shell(v)[sel] - v[sel])  # auf die Eiform schieben
@@ -705,9 +720,20 @@ def mannequin_params(model: BodyModel, params: BodyParams, muscle: float = 1.0, 
         np.add.at(acc, edges[:, 0], target[edges[:, 1]])
         np.add.at(acc, edges[:, 1], target[edges[:, 0]])
         avg = acc / np.maximum(deg, 1)[:, None]
-        target[smooth_sel] += 0.5 * (avg[smooth_sel] - target[smooth_sel])
+        move = smooth_sel & (deg > 0)
+        target[move] += 0.5 * (avg[move] - target[move])
         target[sel] += blend[sel, None] * (shell(target)[sel] - target[sel])
-    target[inner] = centre + 0.5 * (shell(v)[inner] - centre)  # verschwindet im Kopf
+    target[inner] = centre + 0.6 * (shell(v)[inner] - centre)  # verschwindet im Kopf
+    if cavity.any():  # Mundtasche als glatte Haut über den Lippenspalt spannen (Lippenrand fest)
+        all_e = contact._edges(model.faces)
+        all_e = all_e[~(~main)[all_e].any(1)]
+        deg_all = np.bincount(all_e.ravel(), minlength=len(v)).astype(np.float64)
+        target[cavity] = shell(target[cavity].mean(0, keepdims=True))
+        for _ in range(300):
+            acc = np.zeros_like(target)
+            np.add.at(acc, all_e[:, 0], target[all_e[:, 1]])
+            np.add.at(acc, all_e[:, 1], target[all_e[:, 0]])
+            target[cavity] = shell(acc[cavity] / np.maximum(deg_all[cavity], 1)[:, None])
     puppet.offsets = (target - v).astype(np.float32)
     return puppet
 
@@ -822,7 +848,7 @@ def studio(blender: Path, glb: Path, folder: Path, furniture: dict, render: bool
     script = Path(__file__).with_name("blender_studio.py")
     spec = folder / "studio.json"
     spec.write_text(json.dumps({"glb": str(glb), "folder": str(folder), "furniture": furniture,
-                                "render": render, "video": video, "prefix": prefix}), "utf-8")
+                                "motions": list(furniture), "render": render, "video": video, "prefix": prefix}), "utf-8")
     res = subprocess.run([str(blender), "-b", "--python-exit-code", "1", "-P", str(script), "--", str(spec)], capture_output=True,
                          text=True, timeout=7200)
     if res.returncode != 0:
