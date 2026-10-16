@@ -422,13 +422,15 @@ def find_support(model: BodyModel, vertices: np.ndarray, bones: np.ndarray) -> l
         return []  # steht, kniet oder liegt am Boden
     seat_pts = v[pelvis][v[pelvis, 2] < seat_z + 0.05]
     centre = seat_pts.mean(0)
-    # Sitzfläche so hoch, wie es der Körper in jedem Bild zulässt: tiefster Punkt über der Fläche
-    # (Gesäß, Oberschenkel, herabhängende Beine) über die ganze Szene; die Bank reicht nach hinten
+    # Sitzfläche so hoch, wie es Gesäß und Oberschenkel in den meisten Bildern zulassen (tiefster Punkt über
+    # der Fläche, ganze Szene); Unterschenkel und Füße dürfen davor und darunter stehen
     half = np.array([0.15, 0.2])
     mid = centre[:2] + np.array([0.0, 0.08])
-    inside = np.all(np.abs(vertices[..., :2] - mid) < half, axis=-1)
+    legs = _parts_mask(model, ("lowerleg01", "lowerleg02", "foot")) | model.dominant_bone_mask(
+        lambda n: n.startswith("toe"))
+    inside = np.all(np.abs(vertices[..., :2] - mid) < half, axis=-1) & ~legs
     lows = [float(np.percentile(f[m, 2], 1)) for f, m in zip(vertices, inside, strict=True) if m.sum() > 20]
-    seat_z = min(seat_z, min(lows)) if lows else seat_z
+    seat_z = min(seat_z, float(np.percentile(lows, 25))) if lows else seat_z  # selten kurz einsinken statt schweben
     if seat_z < 0.15:
         return []
     boxes = [contact.Box("Bank", np.array([mid[0], mid[1], (seat_z - 0.005) / 2]), np.eye(3),
