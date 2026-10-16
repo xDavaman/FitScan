@@ -188,6 +188,46 @@ def find_shots(track: Track, min_seconds: float = 1.2, min_full: float = 0.6,
     return shots
 
 
+# MediaPipe-Punkte linke ↔ rechte Seite
+_SIDE_PAIRS = [(1, 4), (2, 5), (3, 6), (7, 8), (9, 10), (11, 12), (13, 14), (15, 16), (17, 18), (19, 20),
+               (21, 22), (23, 24), (25, 26), (27, 28), (29, 30), (31, 32)]
+_SWAP = np.arange(33)
+for _a, _b in _SIDE_PAIRS:
+    _SWAP[_a], _SWAP[_b] = _b, _a
+_CORE = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
+
+
+def fix_side_swaps(track: Track, shot: Shot) -> tuple[Track, int]:
+    """Links/rechts vertauscht: Bei glatten, gesichtslosen Figuren (und von hinten) springt MediaPipe
+    oft zwischen Vorder- und Rückansicht. Jedes Bild wird so beschriftet, dass es am besten zum
+    vorigen passt; die Beschriftung, die MediaPipe in den meisten Bildern hatte, gilt.
+    Gibt eine Kopie der Spur und die Zahl umbeschrifteter Bilder zurück."""
+    kps, world = list(track.keypoints), list(track.world)
+    flips, prev = {}, None
+    for i in range(shot.start, shot.end):
+        kp = kps[i]
+        if kp is None:
+            continue
+        flip = False
+        if prev is not None:
+            vis = np.minimum(kp[_CORE, 2], prev[_CORE, 2])[:, None]
+            keep = float((np.abs(kp[_CORE, :2] - prev[_CORE, :2]) * vis).sum())
+            swap = float((np.abs(kp[_SWAP][_CORE, :2] - prev[_CORE, :2]) * vis).sum())
+            flip = swap < 0.7 * keep
+        flips[i] = flip
+        prev = kp[_SWAP] if flip else kp
+    # bisher passend zum ersten Bild: so drehen, dass die Mehrheit unverändert bleibt
+    state = flips
+    if sum(state.values()) > len(state) / 2:
+        state = {i: not s for i, s in state.items()}
+    for i, s in state.items():
+        if s:
+            kps[i] = kps[i][_SWAP]
+            if world[i] is not None:
+                world[i] = world[i][_SWAP]
+    return dataclasses.replace(track, keypoints=kps, world=world), int(sum(state.values()))
+
+
 def capture(model: BodyModel, params: BodyParams, track: Track, shot: Shot, name: str,
             steps: tuple[int, int] = (150, 500), log: Log | None = None) -> mocap.Capture:
     obs = [mocap.Observation(track.keypoints[i], track.world[i]) for i in range(shot.start, shot.end)]
@@ -215,6 +255,7 @@ class Report:
     arm_depth_before_cm: float = 0.0  # Arm im Rumpf, vor dem Lösen
     arm_depth_after_cm: float = 0.0
     findings: list[str] = dataclasses.field(default_factory=list)
+    side_swaps: int = 0  # Bilder mit vertauschter linker/rechter Seite, umbeschriftet
 
     def to_json(self) -> dict:
         return dataclasses.asdict(self)
@@ -222,6 +263,8 @@ class Report:
     def lines(self) -> list[str]:
         a, b = self.seconds
         out = [f"{self.name} (Video {a:.1f} bis {b:.1f} s): mittlerer Bildfehler {self.image_error_px:.1f} px"]
+        if self.side_swaps:
+            out.append(f"  {self.side_swaps} Bilder mit vertauschter linker/rechter Seite umbeschriftet")
         if self.outliers:
             out.append(f"  {self.outliers} Ausreißer-Bilder (verwechselte Glieder) ersetzt")
         if self.limited:
@@ -806,8 +849,10 @@ def transfer(video: Path, glb: Path, folder: Path, height: float | None = None, 
         name = names[k] if names and k < len(names) else f"Szene_{k + 1:02d}"
         a, b = shot.seconds(track.fps)
         log(f"{name}: Bewegung auslesen ({a:.1f} bis {b:.1f} s)")
-        cap = capture(model, params, track, shot, name)
+        fixed, swaps = fix_side_swaps(track, shot)
+        cap = capture(model, params, fixed, shot, name)
         mo, support, rep = make_plausible(model, params, cap, name, (a, b), steady=steady, fig=fig, log=log)
+        rep.side_swaps = swaps
         mo.save(folder / "bewegungen" / f"{name}.npz")
         motions.append(mo)
         reports.append(rep)

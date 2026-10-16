@@ -45,6 +45,20 @@ def test_find_shots_splits_at_cuts_and_jumps():
     assert V.find_shots(_track(cropped)) == []
 
 
+def test_fix_side_swaps_relabels_flipped_frames():
+    kp = _person(360, 640)
+    for a, b in V._SIDE_PAIRS:  # linke Seite im Bild rechts (Person schaut in die Kamera)
+        kp[a, 0], kp[b, 0] = 400, 320
+    kps = [kp.copy() for _ in range(40)]
+    for i in (10, 11, 12, 30):  # MediaPipe meint kurz, die Person stehe mit dem Rücken zur Kamera
+        kps[i] = kp[V._SWAP]
+    tr = _track(kps)
+    fixed, n = V.fix_side_swaps(tr, V.Shot(0, 40, 1.0, 1, 600.0))
+    assert n == 4
+    assert all(np.allclose(k, kp) for k in fixed.keypoints)
+    assert np.allclose(tr.keypoints[10], kp[V._SWAP])  # Original bleibt unverändert
+
+
 def _motion(rv: np.ndarray, bones: list[str]) -> M.Motion:
     root = np.tile([0.0, 0.0, 1.0], (len(rv), 1))
     return M.from_rotvecs("Test", 30.0, bones, rv, root)
