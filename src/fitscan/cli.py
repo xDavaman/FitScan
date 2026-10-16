@@ -90,11 +90,17 @@ def main(argv: list[str] | None = None) -> None:
                         help="keine Feinform aus allen Blickwinkeln (Muskeln, Brust, Rücken), schneller")
     p_scan.add_argument("--kopfvideo", type=Path,
                         help="Nahaufnahme des Kopfes (Kopf langsam drehen): Gesicht, Ohren, Augen genauer")
+    p_scan.add_argument("--handvideo", type=Path, action="append",
+                        help="Nahaufnahme einer Hand (langsam drehen, offen, gespreizt, Faust); je Hand einmal angeben")
     _add_person_args(p_scan)
 
     p_head = sub.add_parser("kopf", aliases=["head"], help="Kopfvideo zum letzten Scan einer Person hinzunehmen")
     p_head.add_argument("video", type=Path, help="Nahaufnahme des Kopfes, Kopf langsam in alle Richtungen drehen")
     p_head.add_argument("--name", default="Ich", help="Person, deren letzter Scan ergänzt wird")
+
+    p_hands = sub.add_parser("haende", aliases=["hands"], help="Handvideos zum letzten Scan einer Person hinzunehmen")
+    p_hands.add_argument("videos", nargs="+", type=Path, help="je Hand ein Video aus der Nähe, Hand langsam drehen")
+    p_hands.add_argument("--name", default="Ich", help="Person, deren letzter Scan ergänzt wird")
 
     p_body = sub.add_parser("koerper", aliases=["body"], help="Körper nur aus Maßen")
     _add_person_args(p_body)
@@ -164,7 +170,8 @@ def main(argv: list[str] | None = None) -> None:
         source = args.quelle[0] if len(args.quelle) == 1 else list(args.quelle)
         _print_result(scan(source, person, args.name, device=args.geraet, fps=args.fps,
                            refine=args.kanten_nachschaerfen, texture=not args.ohne_hautbild,
-                           head_video=args.kopfvideo, detail=not args.ohne_feinform, log=print))
+                           head_video=args.kopfvideo, detail=not args.ohne_feinform,
+                           hand_videos=args.handvideo, log=print))
     elif cmd in ("kopf", "head"):
         from .pipeline import add_head
         from .store import Store
@@ -175,6 +182,16 @@ def main(argv: list[str] | None = None) -> None:
         if latest is None:
             raise SystemExit(f"Für „{args.name}“ gibt es noch keinen Scan. Erst „fitscan scan …“ ausführen.")
         _print_result(add_head(latest, args.video, store, device=args.geraet, log=print))
+    elif cmd in ("haende", "hands"):
+        from .pipeline import add_hands
+        from .store import Store
+
+        store = Store()
+        person = store.find(args.name)
+        latest = store.latest(person.id) if person else None
+        if latest is None:
+            raise SystemExit(f"Für „{args.name}“ gibt es noch keinen Scan. Erst „fitscan scan …“ ausführen.")
+        _print_result(add_hands(latest, args.videos, store, device=args.geraet, log=print))
     elif cmd in ("koerper", "body"):
         from .pipeline import body_from_measurements
 

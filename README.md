@@ -27,6 +27,7 @@ start_windows.bat scan video.mp4 --name Sean --geschlecht m --alter 30 --groesse
 start_windows.bat scan video.mp4 --name Sean --groesse 182 --gewicht 84 --kanten-nachschaerfen   :: unruhiger Hintergrund
 start_windows.bat scan video.mp4 --kopfvideo kopf.mp4 --name Sean --groesse 182 --gewicht 84   :: mit Kopfaufnahme
 start_windows.bat kopf kopf.mp4 --name Sean   :: Kopfaufnahme zum letzten Scan hinzunehmen
+start_windows.bat haende links.mov rechts.mov --name Sean   :: Handvideos zum letzten Scan hinzunehmen
 start_windows.bat koerper --name Sean --groesse 182 --gewicht 84 --taille 86
 start_windows.bat selbsttest
 start_windows.bat info                    :: Grafikkarte, Versionen, Blender gefunden?
@@ -66,6 +67,7 @@ Jeder Scan landet in `daten/personen/<name>/scans/<datum>/`:
 | `ansichten.json` | Lage und Haltung des Körpers in jedem verwendeten Videobild |
 | `feinform.json` | Feinform: Abstand der Modellränder zum Umriss im Video vorher/nachher, Verschiebung je Körperbereich |
 | `kopf.json`, `kopfvergleich.jpg` | nur mit Kopfaufnahme: Gesichtsmaße, Passgenauigkeit, Foto und Modell nebeneinander |
+| `haende.json`, `handvergleich_links.jpg`, `handvergleich_rechts.jpg` | nur mit Handvideos: Fingerlänge, Passgenauigkeit, Foto und Modell nebeneinander |
 | `augen.jpg` | nur mit Kopfaufnahme: eigenes, feines Bild der Augäpfel (zweites Material „Augen“ in GLB, FBX, OBJ) |
 | `params.json`, `offsets.npy` | Körperparameter; daraus wird jeder Re-Scan weitergerechnet |
 | `scan.json`, `bilder.json` | Maße, Eingaben, Qualitätsbericht, Passgenauigkeit je Bild |
@@ -121,6 +123,16 @@ und Augenweißfarbe und in der gemessenen Blickrichtung neu gezeichnet, in einem
 gleicht der Hals aus, damit die eingegebene Körpergröße bleibt. Skelett, Netz und UV-Karte bleiben
 gleich; das Modell bleibt riggbar und geschlossen. Mimik (offener Mund, Lächeln) wird übergangen; Haare sind (noch) nur Farbe
 auf der Kopfhaut.
+
+**Hände:** Mit Handvideos (je Hand eins, Handy etwa 30 cm entfernt, Hand langsam drehen, Finger
+spreizen, Faust machen) sucht MediaPipe Hand Landmarker (Apache 2.0) in jedem Bild 21 Handpunkte und
+erkennt, welche Hand es ist. Annys Hand wird in jedem Bild so gebeugt und gedreht, dass ihre Gelenke und
+Fingerspitzen auf diesen Punkten liegen; gemeinsam für alle Bilder ergibt sich die Fingerlänge (Annys
+Regler). Das Hautbild von Handrücken, Handfläche, Fingern und Nägeln kommt dann scharf aus den
+Nahbildern, nur Farbtöne der Hand zählen (kein Boden oder Teppich an den Fingerrändern), und wird an die
+Hautfarbe aus dem Körpervideo angeglichen. Das Handgelenk bleibt aus dem Körpervideo (dort sitzt oft
+eine Uhr). Handgröße und Fingerdicke lassen sich aus einem Handvideo allein nicht messen und bleiben
+wie vom Körper.
 
 - **Blender:** Datei → Importieren → glTF 2.0 → `koerper.glb`. Blender zeigt das Modell zuerst grau
   (Volumenansicht); Haut und Augen erscheinen in der Materialvorschau (Taste Z). Für Farben wie im

@@ -189,7 +189,7 @@ def body_from_measurements(person: Person, name: str, store: Store | None = None
 def scan(source: Path | list[Path], person: Person, name: str, store: Store | None = None,
          presets: tuple[str, ...] = PRESETS, device: str | None = None, fps: float = 4.0,
          refine: bool = False, texture: bool = True, head_video: Path | None = None, detail: bool = True,
-         log: Log | None = None) -> ScanResult:
+         hand_videos: list[Path] | None = None, log: Log | None = None) -> ScanResult:
     """Video oder Fotos -> angepasster, riggbarer Körper als GLB/OBJ, gespeichert beim Namen.
 
     texture: Hautbild (Farben, Tattoos, Muttermale) aus den Bildern aufs Modell übertragen.
@@ -199,6 +199,9 @@ def scan(source: Path | list[Path], person: Person, name: str, store: Store | No
 
     head_video: zusätzliche Nahaufnahme des Kopfes (Kopf langsam in alle Richtungen drehen). Daraus
     kommen Gesichtsform, Schädel, Ohren und das scharfe Hautbild von Gesicht und Augen.
+
+    hand_videos: je Hand ein Video aus der Nähe (Hand langsam drehen, offen, gespreizt, Faust). Daraus
+    kommen die Fingerlänge und das scharfe Hautbild von Handrücken, Handfläche und Fingern.
 
     refine: Maskenkanten mit GrabCut nachschärfen. Hilft bei unruhigem Hintergrund, schadet bei
     ruhigem Hintergrund leicht (Testvideo: Brust 2,5 statt 3,2 cm Abweichung ohne Nachschärfen).
@@ -211,7 +214,7 @@ def scan(source: Path | list[Path], person: Person, name: str, store: Store | No
         raise ValueError(" ".join(problems))
     store = store or Store()
     paths = [Path(p) for p in (source if isinstance(source, list) else [source])]
-    for p in paths + ([Path(head_video)] if head_video else []):
+    for p in paths + ([Path(head_video)] if head_video else []) + [Path(v) for v in hand_videos or []]:
         if not p.exists():
             raise FileNotFoundError(f"Datei nicht gefunden: {p}")
     recording = best_recording(check_recordings(paths, fps, log), log)
@@ -259,9 +262,13 @@ def scan(source: Path | list[Path], person: Person, name: str, store: Store | No
     if head_video:
         params, skin, eyes, quality["kopf"] = head_stage(model, params, Path(head_video), skin, folder,
                                                          texture=texture, log=log)
+    if hand_videos:
+        params, skin, quality["haende"] = hand_stage(model, params, hand_videos, skin, folder, texture=texture,
+                                                     log=log)
     files, hints = _export(model, params, folder, presets, skin, eyes, log=log)
     record = store.save_scan(rec.id, folder, params, person.measures, measures, quality,
-                             ("video" if is_video else "bilder") + ("+kopf" if head_video else ""), files)
+                             ("video" if is_video else "bilder") + ("+kopf" if head_video else "")
+                             + ("+haende" if hand_videos else ""), files)
     (folder / "bilder.json").write_text(json.dumps(quality["bilder"], indent=2), "utf-8")
     sheet = fit_sheet(frame_results)
     if sheet is not None:
@@ -547,6 +554,57 @@ def head_stage(model: BodyModel, params: BodyParams, video: Path, body_skin: np.
     return out, skin, eyes, info
 
 
+MIN_HAND_FRAMES = 8
+
+
+def hand_stage(model: BodyModel, params: BodyParams, videos: list[Path], body_skin: np.ndarray | None,
+               folder: Path | None = None, texture: bool = True, log: Log | None = None
+               ) -> tuple[BodyParams, np.ndarray | None, list[dict]]:
+    """Hände aus Handvideos (eine Hand je Video): Fingerlänge als Annys Regler,
+    Hautbild von Mittelhand und Fingern (eingesetzt ins Körper-Hautbild). Gibt (Parameter, Hautbild,
+    Kennzahlen je Hand) zurück; speichert haende.json, handvergleich_links/rechts.jpg und haut.jpg."""
+    from . import hands as HS
+
+    log = log or _noop
+    out = params.copy()
+    best: dict[str, tuple[Path, object]] = {}
+    for video in videos:
+        video = Path(video)
+        side, tracks, intr = HS.track_hands(video, log=log)
+        if len(tracks) < MIN_HAND_FRAMES:
+            log(f"Handvideo {video.name}: zu wenige Bilder mit Hand, wird übergangen.")
+            continue
+        fit = HS.fit_hand(HS.HandRig(model, out, side), tracks, intr, log=log)
+        hand = "Linke" if side == "L" else "Rechte"
+        log(f"{hand} Hand: Handpunkte im Mittel {np.median(fit.errors):.1f} Pixel neben MediaPipes Punkten.")
+        good = int((fit.errors < HS.GOOD_FRAME_PX).sum())
+        if side not in best or good > int((best[side][1].errors < HS.GOOD_FRAME_PX).sum()):
+            best[side] = (video, fit)
+    for _, fit in best.values():
+        for name, value in zip(fit.rig.names, fit.sliders, strict=True):
+            out.local[name] = float(value)
+    info = [HS.hand_info(fit) for _, fit in best.values()]
+    skin = body_skin
+    if texture and body_skin is not None and best:
+        rest = model.rest_numpy(out)["vertices"].astype(np.float64)
+        for video, fit in best.values():
+            log(f"Hautbild der {'linken' if fit.side == 'L' else 'rechten'} Hand aus dem Handvideo …")
+            hs = HS.bake_hand(model, rest, fit, video, size=body_skin.shape[0], log=log)
+            skin = HS.merge_hand_skin(skin, hs, log=log)
+            if folder is not None:
+                sheet = HS.compare_hand(model, rest, fit, video, skin)
+                if sheet is not None:
+                    name = "handvergleich_" + ("links" if fit.side == "L" else "rechts") + ".jpg"
+                    cv2.imwrite(str(Path(folder) / name), cv2.cvtColor(sheet, cv2.COLOR_RGB2BGR),
+                                [cv2.IMWRITE_JPEG_QUALITY, 90])
+        if folder is not None:
+            cv2.imwrite(str(Path(folder) / "haut.jpg"), cv2.cvtColor(skin, cv2.COLOR_RGB2BGR),
+                        [cv2.IMWRITE_JPEG_QUALITY, 94])
+    if folder is not None:
+        HS.save_sides(info, folder)
+    return out, skin, info
+
+
 def video_white(path: Path, samples: int = 8) -> np.ndarray | None:
     """Farbstich einer Aufnahme an hellen, farblosen Flächen (für ältere Scans ohne weiss.json)."""
     from .texture import white_point, white_samples
@@ -580,6 +638,29 @@ def add_head(record: ScanRecord, video: Path, store: Store | None = None, preset
     quality = {**record.quality, "kopf": info, "kopfvideo": str(video), "aus_scan": record.id}
     new = store.save_scan(record.person_id, folder, params, record.inputs, record.measures, quality,
                           record.source.split("+")[0] + "+kopf", files)
+    log(f"Fertig: {folder}")
+    return ScanResult(new, params, record.measures, None, [], files, hints)
+
+
+def add_hands(record: ScanRecord, videos: list[Path], store: Store | None = None,
+              presets: tuple[str, ...] = PRESETS, device: str | None = None, log: Log | None = None) -> ScanResult:
+    """Handvideos zu einem gespeicherten Scan hinzunehmen; ergibt einen neuen Scan derselben Person."""
+    log = log or _noop
+    videos = [Path(v) for v in videos]
+    for v in videos:
+        if not v.exists():
+            raise FileNotFoundError(f"Datei nicht gefunden: {v}")
+    store = store or Store()
+    model = BodyModel.get(device)
+    skin, eyes = (_read_rgb(record.folder / f) for f in ("haut.jpg", "augen.jpg"))
+    folder = store.new_scan_folder(record.person_id)
+    params, skin, info = hand_stage(model, record.params(), videos, skin, folder, log=log)
+    files, hints = _export(model, params, folder, presets, skin, eyes if skin is not None else None, log=log)
+    if eyes is not None:
+        cv2.imwrite(str(folder / "augen.jpg"), cv2.cvtColor(eyes, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 94])
+    quality = {**record.quality, "haende": info, "handvideos": [str(v) for v in videos], "aus_scan": record.id}
+    source = record.source if "+haende" in record.source else record.source + "+haende"
+    new = store.save_scan(record.person_id, folder, params, record.inputs, record.measures, quality, source, files)
     log(f"Fertig: {folder}")
     return ScanResult(new, params, record.measures, None, [], files, hints)
 
