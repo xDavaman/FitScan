@@ -375,6 +375,7 @@ def skin_mask(rgb: np.ndarray, outline: np.ndarray) -> np.ndarray:
 class HandSkin:
     skin: np.ndarray
     alpha: np.ndarray
+    forearm: np.ndarray  # (size, size) bool: Unterarm derselben Seite, Bezug für die Farbe
 
 
 def bake_hand(model: BodyModel, rest: np.ndarray, fit: HandFit, video: Path, size: int | None = None,
@@ -441,32 +442,45 @@ def bake_hand(model: BodyModel, rest: np.ndarray, fit: HandFit, video: Path, siz
     filled = np.zeros(size * size, bool)
     filled[m.texel] = True
     alpha = _pad(np.repeat(alpha.reshape(size, size, 1), 3, -1), filled.reshape(size, size), 12)[..., 0]
+    fore = model.dominant_bone_mask(lambda n: n.startswith("lowerarm") and n.endswith("." + fit.side))
+    forearm = np.zeros(size * size, bool)
+    forearm[m.texel] = fore[faces[m.face]].all(1)
     if log:
         log(f"Hautbild der {'linken' if fit.side == 'L' else 'rechten'} Hand aus {len(good)} Bildern.")
-    return HandSkin(skin, alpha)
+    return HandSkin(skin, alpha, forearm.reshape(size, size))
 
 
 def merge_hand_skin(body: np.ndarray, hand: HandSkin, log: Log | None = None) -> np.ndarray:
-    """Hand-Hautbild einsetzen; Farbe und Helligkeit an das Körper-Hautbild angleichen (anderes Licht)."""
+    """Hand-Hautbild einsetzen; Farbe und Helligkeit an den Unterarm im Körper-Hautbild angleichen
+    (anderes Licht). Bezug ist der Unterarm, nicht die Hand im Körpervideo: dort ist die Hand klein,
+    oft im Schatten und mit Hintergrund vermischt, die Hand wirkte sonst dunkler als der Arm."""
     from .texture import to_linear, to_srgb
 
-    alpha = hand.alpha
-    head = hand.skin
+    alpha, head, fore = hand.alpha, hand.skin, hand.forearm
     if head.shape != body.shape:
         head = cv2.resize(head, body.shape[1::-1], interpolation=cv2.INTER_AREA)
         alpha = cv2.resize(alpha, body.shape[1::-1], interpolation=cv2.INTER_AREA)
+        fore = cv2.resize(fore.astype(np.uint8), body.shape[1::-1], interpolation=cv2.INTER_NEAREST) > 0
     lb, lh = to_linear(body), to_linear(head)
-    sigma = body.shape[0] / 256
-    bb, hb = cv2.GaussianBlur(lb, (0, 0), sigma), cv2.GaussianBlur(lh, (0, 0), sigma)
-    both = (alpha > 0.8) & (hb.min(-1) > 0.02)
     gain = np.ones(3, np.float32)
-    if both.sum() > 500:
-        gain = np.median(bb[both] / hb[both], axis=0).astype(np.float32)
+    ref, own = _typical(lb[fore]), _typical(lh[alpha > 0.8])
+    if ref is not None and own is not None:
+        gain = (ref / np.maximum(own, 1e-4)).astype(np.float32)
     if log:
         log("Hand an den Körper angeglichen (Rot/Grün/Blau " + "/".join(f"{g:.2f}" for g in gain) + ").")
     a = cv2.GaussianBlur(alpha.astype(np.float32), (0, 0), HAND_FEATHER)[..., None]
     a = np.minimum(a, alpha[..., None])  # nur innerhalb der Hand, nicht auf das Handgelenk hinaus
     return to_srgb(a * lh * gain + (1 - a) * lb)
+
+
+def _typical(px: np.ndarray) -> np.ndarray | None:
+    """Typische Hautfarbe: Median ohne die dunkelsten und hellsten Stellen (Tattoos, Uhr, Glanzlichter)."""
+    if len(px) < 500:
+        return None
+    luma = px @ np.array([0.2126, 0.7152, 0.0722], np.float32)
+    lo, hi = np.percentile(luma, [25, 85])
+    keep = (luma >= lo) & (luma <= hi)
+    return np.median(px[keep], 0)
 
 
 def compare_hand(model: BodyModel, rest: np.ndarray, fit: HandFit, video: Path, skin: np.ndarray,
