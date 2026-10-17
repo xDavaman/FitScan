@@ -110,6 +110,20 @@ def run_add_head(name: str, head):
         yield (log, None, None) if result is None else (log, result.files.get("glb"), _files(result))
 
 
+def run_add_hands(name: str, files):
+    from . import pipeline
+
+    store = Store()
+    person = store.find(name or "")
+    latest = store.latest(person.id) if person else None
+    if latest is None or not files:
+        yield "Bitte Person mit vorhandenem Scan und mindestens ein Handvideo wählen.", None, None
+        return
+    videos = [_path(f) for f in files]
+    for log, result in _stream(lambda log: pipeline.add_hands(latest, videos, store, log=log)):
+        yield (log, None, None) if result is None else (log, result.files.get("glb"), _files(result))
+
+
 def run_measures_only(name, gender, age, height, weight, *optional):
     from . import pipeline
 
@@ -188,6 +202,8 @@ def run_selftest(quick: bool):
 
 HEAD_VIDEO_LABEL = ("Kopfvideo (optional): Handy etwa 40 cm vor dem Gesicht, Kopf langsam nach links, rechts, "
                     "oben und unten drehen, neutral schauen, Mund zu")
+HAND_VIDEO_LABEL = ("Handvideos, je Hand eins: Handy etwa 30 cm entfernt, Hand langsam drehen (Rücken, Fläche, "
+                    "Seiten), Finger spreizen, Faust machen; Uhr und Ringe vorher abnehmen")
 
 
 def _show(path: str | None) -> str | None:
@@ -280,6 +296,12 @@ def build():
                 k_log = gr.Textbox(label="Ablauf", lines=6)
                 k_glb = gr.State()
             k_go.click(run_add_head, [who, k_file], [k_log, k_glb, s_files]).then(_show, k_glb, h_model)
+            with gr.Accordion("Hände nachscannen (Finger, Handrücken, Handfläche genauer)", open=False):
+                g_file = gr.File(label=HAND_VIDEO_LABEL, file_count="multiple", file_types=["video"])
+                g_go = gr.Button("Handvideos zum letzten Scan hinzunehmen")
+                g_log = gr.Textbox(label="Ablauf", lines=6)
+                g_glb = gr.State()
+            g_go.click(run_add_hands, [who, g_file], [g_log, g_glb, s_files]).then(_show, g_glb, h_model)
             refresh.click(lambda: gr.Dropdown(choices=person_choices()), None, who)
             who.change(history, who, [h_table, h_text, h_model])
             s_go.click(restyle, [who, s_weight, s_muscle], [h_model, s_files, s_msg])
