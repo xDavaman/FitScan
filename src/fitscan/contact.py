@@ -237,7 +237,8 @@ class Checker:
         if len(mine) == 0 or len(theirs) == 0:
             return 0.0
         dist, _ = cKDTree(vertices[theirs]).query(vertices[mine])
-        inside = winding(vertices[mine], vertices, self.faces) > 1.0
+        # Punkte, die tiefer als radius von other entfernt sind, stecken in einem anderen Teil
+        inside = (winding(vertices[mine], vertices, self.faces) > 1.0) & (dist < radius)
         return float(dist[inside].max()) if inside.any() else 0.0
 
     def _grouped(self, kind: str, mask: np.ndarray, depth: np.ndarray, detail: str = "") -> list[Finding]:

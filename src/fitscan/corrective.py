@@ -56,7 +56,7 @@ class Joint:
     def pose(self, angle: float) -> dict:
         """Haltung zum Berechnen der Form: nur dieses Gelenk auf dieser Seite gebeugt."""
         if self.name == "huefte":  # beide Beine: der Bauch liegt dann zwischen beiden Oberschenkeln
-            return P.pose(P.stand(), legs=dict(hip=angle, knee=min(angle, 100)))
+            return P.pose(P.stand(), legs=dict(hip=angle, knee=min(angle, 100), out=4, turn=-8))
         return P.pose(P.stand(), **{f"arm_{self.side}": dict(down=24, fwd=10, elbow=angle)})
 
 
