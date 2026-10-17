@@ -160,7 +160,7 @@ def main(argv: list[str] | None = None) -> None:
             report = rec.report
             print(f"\n{rec.label} – Ergebnis: {report.level} ({report.usable} von {report.frames} Bildern brauchbar)")
             print("Erfasste Blickwinkel:",
-                  ", ".join(sector_name(i) for i, c in enumerate(report.covered) if c) or "keine")
+                  "; ".join(sector_name(i) for i, c in enumerate(report.covered) if c) or "keine")
             for line in report.summary:
                 print(" -", line)
     elif cmd == "scan":

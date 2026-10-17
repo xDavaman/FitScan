@@ -6,7 +6,7 @@ description: Anleitung für eine saubere Testaufnahme mit Handy oder Webcam gebe
 # Testscan aufnehmen
 
 ## Echte Aufnahme (Handy)
-- Checkliste aus `quality.CHECKLIST` vorlesen: eng anliegende Kleidung, ruhiger Hintergrund, Licht von vorn, etwa 2 m Abstand, Handy hochkant auf Hüfthöhe, A-Pose, einmal langsam drehen (ca. 20 s).
+- Checkliste aus `quality.CHECKLIST` vorlesen: eng anliegende Kleidung, barfuß und ohne Uhr, ruhiger Hintergrund, weiches weißes Licht von vorn (keine Lampe direkt darüber, kein Nachtlicht), etwa 2 m Abstand, Handy hochkant auf Hüfthöhe, A-Pose, einmal langsam drehen (ca. 20 s).
 - Mit Maßband messen: Größe, Gewicht, dazu Brust, Taille, Hüfte, Oberschenkel, Wade, Oberarm, Hals, Schrittlänge. Diese Werte sind die Wahrheit für die Abnahme (< 2 cm).
 - Video auf den PC kopieren, dann `fitscan pruefen` und `fitscan scan`.
 
