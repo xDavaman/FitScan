@@ -4,8 +4,10 @@ Aufruf:
     blender -b -P src/fitscan/blender_preview.py -- koerper.glb uebung.npz video.mp4 [standbild.png]
 
 uebung.npz enthält die verformten Punkte je Bild in Annys Reihenfolge (vertices, F×V×3, Boden z = 0),
-die Geräte als Zylinder je Bild (cylinders, F×K×7: Mitte, Achse×halbe Länge, Radius), Bildrate
-(fps), Untertitel (captions: Start, Ende, Text) und optional Bilder für ein Standbild (stills).
+die Geräte als Zylinder je Bild (cylinders, F×K×7: Mitte, Achse×halbe Länge, Radius) und Quader
+(boxes, F×K×15: Mitte, Drehung 3×3, halbe Kanten; z. B. eine Bank), Bildrate (fps), Untertitel
+(captions: Start, Ende, Text), optional Bilder für ein Standbild (stills) und je Bild Blickpunkt
+und Kamerarichtung (views, F×2×3). Video "-": nur die Standbilder.
 Die Haut kommt aus dem GLB, die Form aus den Punkten. Blender wird nur als Programm aufgerufen.
 """
 
@@ -15,7 +17,7 @@ import sys
 
 import bpy
 import numpy as np
-from mathutils import Vector, kdtree
+from mathutils import Matrix, Vector, kdtree
 
 
 def load_body(glb: str, rest: np.ndarray):
@@ -40,7 +42,7 @@ def load_body(glb: str, rest: np.ndarray):
     return mesh, index
 
 
-def build_scene(n_cylinders: int, fps: int, frames: int):
+def build_scene(n_cylinders: int, fps: int, frames: int, n_boxes: int = 0):
     sc = bpy.context.scene
     sc.render.fps = fps
     sc.frame_start, sc.frame_end = 0, frames - 1
@@ -57,6 +59,19 @@ def build_scene(n_cylinders: int, fps: int, frames: int):
         c.data.materials.append(metal)
         bpy.ops.object.shade_smooth()
         cylinders.append(c)
+    pad = bpy.data.materials.new("Polster")
+    pad.use_nodes = True
+    pad.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (0.05, 0.05, 0.06, 1)
+    pad.node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 0.6
+    boxes = []
+    for _ in range(n_boxes):
+        bpy.ops.mesh.primitive_cube_add(size=2)
+        b = bpy.context.object
+        b.data.materials.append(pad)
+        bevel = b.modifiers.new("Kante", "BEVEL")
+        bevel.width = 0.02
+        bevel.segments = 3
+        boxes.append(b)
     bpy.ops.mesh.primitive_plane_add(size=12)
     floor = bpy.context.object
     fm = bpy.data.materials.new("Boden")
@@ -86,7 +101,7 @@ def build_scene(n_cylinders: int, fps: int, frames: int):
     sc.render.engine = "BLENDER_EEVEE"
     sc.eevee.use_soft_shadows = True
     sc.view_settings.view_transform = "Standard"
-    return cylinders, cam
+    return cylinders, boxes, cam
 
 
 def add_caption(cam, captions, fps):
@@ -122,9 +137,10 @@ def main(argv):
     still = argv[3] if len(argv) > 3 else None
     d = np.load(data_path, allow_pickle=True)
     verts, cyl = d["vertices"], d["cylinders"]
+    box = d["boxes"] if "boxes" in d.files else np.zeros((len(verts), 0, 15))
     fps = int(d["fps"])
     mesh, index = load_body(glb, d["rest"])
-    cylinders, cam = build_scene(cyl.shape[1], fps, len(verts))
+    cylinders, boxes, cam = build_scene(cyl.shape[1], fps, len(verts), box.shape[1])
     caption, caption_at = add_caption(cam, list(d["captions"]), fps)
     # Ganzen Ablauf samt Geräten ins Bild nehmen: Mitte des Bereichs, Abstand nach Höhe.
     points = np.concatenate([verts.reshape(-1, 3), cyl[..., :3].reshape(-1, 3)])
@@ -134,6 +150,7 @@ def main(argv):
     half_fov = np.arctan(36 * 9 / 16 / 2 / cam.data.lens)
     distance = 1.2 * (high[2] - low[2]) / 2 / np.tan(half_fov) + 0.5
     cam_offset = direction / np.linalg.norm(direction) * max(distance, float(np.linalg.norm(direction)))
+    views = d["views"] if "views" in d.files else None
 
     def update(scene, *_):
         f = min(max(scene.frame_current, 0), len(verts) - 1)
@@ -145,8 +162,13 @@ def main(argv):
             c.location = Vector(centre)
             c.rotation_euler = Vector((0, 0, 1)).rotation_difference(Vector(axis / length)).to_euler()
             c.scale = (r, r, length)
-        cam.location = Vector(target + cam_offset)
-        cam.rotation_euler = (Vector(target) - cam.location).to_track_quat("-Z", "Y").to_euler()
+        for k, b in enumerate(boxes):
+            m = Matrix(box[f, k, 3:12].reshape(3, 3).tolist()).to_4x4()
+            b.matrix_world = Matrix.Translation(Vector(box[f, k, :3])) @ m @ Matrix.Diagonal(
+                Vector(list(box[f, k, 12:15]) + [1.0]))
+        look, offset = (views[f, 0], views[f, 1]) if views is not None else (target, cam_offset)
+        cam.location = Vector(look + offset)
+        cam.rotation_euler = (Vector(look) - cam.location).to_track_quat("-Z", "Y").to_euler()
         caption.body = caption_at(f)
 
     bpy.app.handlers.frame_change_pre.append(update)
@@ -158,6 +180,8 @@ def main(argv):
             sc.frame_set(f)
             sc.render.filepath = f"{still}_{k}.png"
             bpy.ops.render.render(write_still=True)
+    if video == "-":
+        return
     sc.render.image_settings.file_format = "FFMPEG"
     sc.render.ffmpeg.format = "MPEG4"
     sc.render.ffmpeg.codec = "H264"

@@ -7,7 +7,8 @@ und werden vom Elternknochen mitgedreht:
     "links":  zur linken Körperseite (Wirbelsäule, Kopf seitlich)
     "vor":    nach vorn schwenken (Hüfte beugen, Arm heben, Oberkörper beugen; negativ = nach hinten)
     "spreizen": wie "aussen", aber nach "vor" (Knie bei gebeugter Hüfte nach außen)
-    "dreh":   um die eigene Längsachse drehen
+    "dreh":   um die eigene Längsachse drehen, positiv = nach innen (Fußspitze zur Körpermitte);
+              links und rechts spiegelbildlich
     "beugen": Ellbogen und Knie um ihre Scharnierachse, als Gesamtwinkel (0 = gestreckt)
 Der ganze Körper kippt über ("root", "pitch"/"yaw"/"roll").
 
@@ -87,6 +88,8 @@ class Poser:
                 continue
             if direction == "dreh":
                 axis = cur
+                if name.endswith(".R"):  # spiegelbildlich: gleicher Wert, gleiche Drehrichtung im Körper
+                    angle = -angle
             else:
                 axis = np.cross(cur, self.toward(name, direction))
                 if np.linalg.norm(axis) < 1e-9:

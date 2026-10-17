@@ -39,7 +39,8 @@ class Joint:
             down = np.einsum("fij,jk,k->fi", poses[:, pelvis, :3, :3], reference[pelvis, :3, :3].T, rest)
             thigh = poses[:, b, :3, 3] - poses[:, a, :3, 3]
         else:
-            a, b, c = (model.bone(f"{n}.{s}") for n in ("upperarm01", "lowerarm01", "wrist"))
+            chain = ("upperleg01", "lowerleg01", "foot") if self.name == "knie" else ("upperarm01", "lowerarm01", "wrist")
+            a, b, c = (model.bone(f"{n}.{s}") for n in chain)
             down = poses[:, b, :3, 3] - poses[:, a, :3, 3]
             thigh = poses[:, c, :3, 3] - poses[:, b, :3, 3]
         cos = np.einsum("fi,fi->f", down, thigh) / np.linalg.norm(down, axis=1) / np.linalg.norm(thigh, axis=1)
@@ -57,6 +58,8 @@ class Joint:
         """Haltung zum Berechnen der Form: nur dieses Gelenk auf dieser Seite gebeugt."""
         if self.name == "huefte":  # beide Beine: der Bauch liegt dann zwischen beiden Oberschenkeln
             return P.pose(P.stand(), legs=dict(hip=angle, knee=min(angle, 100), out=4, turn=-8))
+        if self.name == "knie":  # Oberschenkel waagerecht, Wade legt sich an
+            return P.pose(P.stand(), **{f"leg_{self.side}": dict(hip=90, knee=angle, out=4, turn=-8)})
         return P.pose(P.stand(), **{f"arm_{self.side}": dict(down=24, fwd=10, elbow=angle)})
 
 
@@ -68,6 +71,8 @@ def joints() -> list[Joint]:
                          (30.0, 45.0, 60.0, 75.0, 90.0, 105.0, 120.0, 135.0)))
         out.append(Joint("ellbogen", s, [(f"Oberarm {seite}", f"Unterarm {seite}")],
                          (60.0, 80.0, 100.0, 120.0, 135.0, 150.0)))
+        out.append(Joint("knie", s, [(f"Oberschenkel {seite}", f"Unterschenkel {seite}")],
+                         (90.0, 110.0, 125.0, 140.0, 150.0, 160.0)))
     return out
 
 
@@ -112,8 +117,21 @@ def _pushes(vertices, normals, faces, parts, pairs, radius=0.06):
     return push, hit
 
 
+def relax(lap, delta: np.ndarray, region: np.ndarray, iterations: int = 10) -> np.ndarray:
+    """Verschiebung im Bereich region glätten (je Schritt halb zum Mittel der Nachbarn): benachbarte
+    Punkte, die in einer Falte verschieden weit geschoben wurden, sollen keine Zacken bilden."""
+    from scipy import sparse
+
+    deg = lap.diagonal()
+    avg = sparse.diags(1.0 / np.maximum(deg, 1)) @ (sparse.diags(deg) - lap)
+    out = delta.copy()
+    for _ in range(iterations):
+        out[region] = 0.5 * out[region] + 0.5 * (avg @ out)[region]
+    return out
+
+
 def solve_shape(model, skinned: np.ndarray, pairs, rest: np.ndarray, steps: int = 8,
-                smooth: float = 1.0) -> np.ndarray:
+                smooth: float = 1.0, relaxing: int = 10) -> np.ndarray:
     """Weltverschiebung je Punkt (V, 3), die die Teile in pairs auseinanderlegt und glatt ausläuft.
     rest: dieselben Punkte in der Bezugshaltung (dort berührt sich nichts)."""
     from scipy import sparse
@@ -150,6 +168,8 @@ def solve_shape(model, skinned: np.ndarray, pairs, rest: np.ndarray, steps: int 
         lhs = (smooth * lr + 10.0 * c.T @ c).tocsc()  # harmonisch: kein Überschwingen
         for d in range(3):
             delta[r, d] = spsolve(lhs, 10.0 * c.T @ goal[:, d])
+        if relaxing:
+            delta = relax(lap, delta, r, relaxing)
     return delta
 
 
