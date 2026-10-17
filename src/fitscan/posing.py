@@ -253,6 +253,7 @@ class Figure:
         import torch
 
         self.model = model
+        self.correctives = None  # corrective.Correctives: Haut gibt bei starkem Beugen nach
         self._rest_v = torch.as_tensor(vertices, dtype=torch.float32)[None]
         self._rest_p = torch.as_tensor(bone_poses, dtype=torch.float32)[None]
         ref = self.pose(np.tile(np.eye(4), (1, len(model.bone_labels), 1, 1)))
@@ -283,21 +284,35 @@ class Figure:
         poses = np.stack([to_z @ np.linalg.inv(ibm[lookup[n]]) for n in model.bone_labels])
         return cls(model, verts, poses)
 
-    def pose(self, frames: list[dict] | np.ndarray, batch: int = 64) -> dict[str, np.ndarray]:
+    def pose(self, frames: list[dict] | np.ndarray, batch: int = 64, offsets: np.ndarray | None = None,
+             transforms: bool = False) -> dict[str, np.ndarray]:
         """frames: Liste von Drehungen je Knochen (dict Name -> 3x3, local-ref) oder (F, J, 4, 4).
+        offsets: Verschiebung der Ruhepunkte je Bild (F, V, 3); ohne sie gelten die Korrekturformen
+        (self.correctives), falls gesetzt.
         Rückgabe: vertices (F, V, 3), poses (F, J, 4, 4) Weltlage der Knochen; die Wurzel liegt im
-        Ursprung, die Verschiebung über dem Boden kommt getrennt dazu."""
+        Ursprung, die Verschiebung über dem Boden kommt getrennt dazu. transforms=True liefert dazu
+        die Skinning-Matrizen der Knochen (F, J, 4, 4)."""
         import torch
 
         if not isinstance(frames, np.ndarray):
             frames = np.stack([self.poser.matrices(f) for f in frames]) if frames else np.zeros((0, 0, 4, 4))
-        verts, poses = [], []
+        verts, poses, mats = [], [], []
         anny = self.model.anny
         with torch.no_grad():
             for i in range(0, len(frames), batch):
                 p = torch.as_tensor(frames[i:i + batch], dtype=torch.float32)
-                transforms, bone_poses = anny.get_bone_transforms(p, self._rest_p)
-                v = anny.get_skinned_vertices(self._rest_v.expand(len(p), -1, -1), transforms)
+                t, bone_poses = anny.get_bone_transforms(p, self._rest_p)
+                rest = self._rest_v.expand(len(p), -1, -1)
+                if offsets is not None:
+                    rest = rest + torch.as_tensor(offsets[i:i + batch], dtype=torch.float32)
+                elif self.correctives is not None:
+                    rest = rest + torch.as_tensor(self.correctives.offsets(bone_poses.double().numpy()))
+                v = anny.get_skinned_vertices(rest, t)
                 verts.append(v.double().numpy())
                 poses.append(bone_poses.double().numpy())
-        return {"vertices": np.concatenate(verts), "poses": np.concatenate(poses)}
+                if transforms:
+                    mats.append(t.double().numpy())
+        out = {"vertices": np.concatenate(verts), "poses": np.concatenate(poses)}
+        if transforms:
+            out["transforms"] = np.concatenate(mats)
+        return out
