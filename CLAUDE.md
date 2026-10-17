@@ -29,7 +29,8 @@ Technischer Plan: https://claude.ai/code/artifact/e834733a-d72b-4a65-bdea-881002
 | `level.py` | gekipptes Handy ausgleichen: Neigung aus senkrechten Hintergrundkanten, Maske/Punkte auf waagerechte Kamera umrechnen |
 | `vision.py` | MediaPipe Pose (Körperpunkte, Maske, Blickrichtung); auf dem iPhone: Apple Vision |
 | `segment.py` | optionale Kantennachschärfung der Maske mit GrabCut (Standard aus, hilft nur bei unruhigem Hintergrund) |
-| `quality.py` | Scan-Assistent: Licht, Schärfe, Abstand, Position, A-Pose, Stillhalten, Blickwinkel |
+| `quality.py` | Scan-Assistent: Licht (auch Farbstich, harte Glanzlichter), Schärfe, Abstand, Position, A-Pose, Stillhalten, Socken, Blickwinkel |
+| `color.py` | sRGB ↔ linear, Farbstich an hellen, farblosen Flächen im Hintergrund (ohne torch, auch für den Scan-Assistenten) |
 | `video.py` | Video/Fotos einlesen (iPhone-HDR/HLG über PyAV selbst nach sRGB), prüfen, bestes Bild pro Blickwinkel wählen |
 | `head.py` | Kopfaufnahme: Gesichtspunkte (MediaPipe Face Landmarker), Bündelausgleich, Kopf verformen (Gesicht, Schädel, Ohren), Kopf-Hautbild, Augen zeichnen |
 | `texture.py` | Hautbild: UV-Karte, Sichtbarkeit je Bild, Farben in zwei Lagen mischen, Lücken füllen, Feinausrichtung per optischem Fluss, Vorschau-Rendering |

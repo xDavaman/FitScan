@@ -35,9 +35,9 @@ start_windows.bat info                    :: Grafikkarte, Versionen, Blender gef
 
 ## So gelingt der Scan
 
-- Eng anliegende Kleidung, lange Haare zusammenbinden
+- Eng anliegende Kleidung (am besten Shorts), barfuß, ohne Uhr und Schmuck, lange Haare zusammenbinden
 - Ruhiger, einfarbiger Hintergrund, der sich von Kleidung und Haut abhebt
-- Helles, gleichmäßiges Licht von vorn oder oben, kein Fenster hinter dir
+- Helles, weiches, weißes Licht von vorn (z. B. Tageslicht), keine Lampe direkt über oder hinter dir, kein farbiges Licht
 - Etwa 2 m Abstand, Handy hochkant auf Hüfthöhe (Stativ), ganzer Körper mit Rand im Bild
 - A-Pose: Arme gestreckt, etwa 30° vom Körper, Füße schulterbreit
 - Einmal langsam auf der Stelle drehen (etwa 20 Sekunden)

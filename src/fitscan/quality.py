@@ -13,19 +13,24 @@ import math
 import cv2
 import numpy as np
 
+from .color import white_samples
 from .vision import (
     FACE,
     L_ANKLE,
     L_ELBOW,
+    L_FOOT_INDEX,
     L_HEEL,
     L_HIP,
+    L_KNEE,
     L_SHOULDER,
     L_WRIST,
     NOSE,
     R_ANKLE,
     R_ELBOW,
+    R_FOOT_INDEX,
     R_HEEL,
     R_HIP,
+    R_KNEE,
     R_SHOULDER,
     R_WRIST,
     FrameObservation,
@@ -50,6 +55,13 @@ LIMITS = {
     "max_arm_change_deg": 12.0,
     "max_soft_mask": 0.25,
     "max_background_edges": 0.12,
+    # Werte unten an den Drehvideos vom 14. und 16.10.2026 eingestellt (Küche nachts, Schlafzimmer, Wohnzimmer)
+    "max_color_cast": 0.2,  # Weiß im Hintergrund: Rot oder Blau weicht um mehr als ~22 % von Grün ab (ln)
+    "highlight_luma": 230,
+    "max_highlight_share": 0.01,  # so viel des Körpers über den Knien ist heller (harte Lampe direkt über einem)
+    "min_shin_chroma": 10.0,  # Unterschenkel zeigt Haut (Lab-Buntheit); sonst lange Hose, keine Fußprüfung
+    "max_foot_chroma": 0.6,  # Fuß weniger bunt als dieser Anteil vom Unterschenkel: Socken (weiß, grau, schwarz)
+    "max_foot_lightness": 30,  # oder deutlich heller als der Unterschenkel (L*, 0..255)
 }
 
 SECTORS = 12  # Blickwinkel in 30°-Schritten
@@ -87,6 +99,39 @@ def arm_angles(kp: np.ndarray) -> tuple[float, float]:
     return left, right
 
 
+def _feet_vs_shins(rgb: np.ndarray, person: np.ndarray, kp: np.ndarray) -> list[tuple[float, float]]:
+    """Je sichtbarem Bein: (Buntheit Fuß / Buntheit Unterschenkel, Helligkeit Fuß − Unterschenkel).
+    Nur Beine, deren Unterschenkel Haut zeigt; Socken sind fast farblos (weiß, grau, schwarz)."""
+    out = []
+    for knee, ankle, heel, toe in ((L_KNEE, L_ANKLE, L_HEEL, L_FOOT_INDEX), (R_KNEE, R_ANKLE, R_HEEL, R_FOOT_INDEX)):
+        if kp[[knee, ankle, heel, toe], 2].min() < 0.5:
+            continue
+        k, a, he, to = kp[[knee, ankle, heel, toe], :2]
+        r = max(2, int(0.12 * np.linalg.norm(a - k)))
+        x0, y0 = (np.minimum.reduce([k, a, he, to]) - r).astype(int).clip(0)
+        x1, y1 = (np.maximum.reduce([k, a, he, to]) + r + 1).astype(int)
+        crop, inside = rgb[y0:y1, x0:x1], person[y0:y1, x0:x1]
+        if crop.size == 0:
+            continue
+        shin, foot = np.zeros(inside.shape, np.uint8), np.zeros(inside.shape, np.uint8)
+        for t in np.linspace(0.35, 0.75, 5):
+            c = k + t * (a - k) - (x0, y0)
+            cv2.circle(shin, (int(c[0]), int(c[1])), r, 1, -1)
+        for c in (he, to, (he + to) / 2):
+            cv2.circle(foot, (int(c[0] - x0), int(c[1] - y0)), r, 1, -1)
+        foot[: max(0, int(a[1]) - y0)] = 0  # nur unterhalb des Knöchels
+        shin_px, foot_px = crop[(shin > 0) & inside], crop[(foot > 0) & inside]
+        if len(shin_px) < 30 or len(foot_px) < 30:
+            continue
+        lab = cv2.cvtColor(np.concatenate([shin_px, foot_px])[None], cv2.COLOR_RGB2LAB)[0].astype(np.float32)
+        s, f = np.median(lab[: len(shin_px)], 0), np.median(lab[len(shin_px) :], 0)
+        s_chroma, f_chroma = math.hypot(s[1] - 128, s[2] - 128), math.hypot(f[1] - 128, f[2] - 128)
+        if s_chroma < LIMITS["min_shin_chroma"]:
+            continue
+        out.append((f_chroma / s_chroma, float(f[0] - s[0])))
+    return out
+
+
 def check_frame(rgb: np.ndarray, obs: FrameObservation, prev: FrameObservation | None = None) -> FrameQuality:
     hints: list[Hint] = []
     metrics: dict[str, float] = {}
@@ -113,11 +158,31 @@ def check_frame(rgb: np.ndarray, obs: FrameObservation, prev: FrameObservation |
         b_luma = float(gray[bg].mean()) if bg.any() else p_luma
         metrics.update(person_luma=p_luma, background_luma=b_luma)
         if p_luma < LIMITS["min_person_luma"]:
-            add("dunkel", "Zu dunkel. Mehr Licht von vorn oder oben.", ROT)
+            add("dunkel", "Zu dunkel. Mehr weiches Licht von vorn.", ROT)
         elif p_luma > LIMITS["max_person_luma"]:
             add("hell", "Überbelichtet. Licht etwas weicher machen oder Abstand zur Lampe vergrößern.", GELB)
         if b_luma - p_luma > LIMITS["max_backlight"] and p_luma < LIMITS["backlight_person_luma"]:
             add("gegenlicht", "Gegenlicht: Hinter dir ist es heller als vorn. Fenster oder Lampe gehören hinter die Kamera, nicht hinter dich.", GELB)
+        upper = person.copy()
+        if kp[[L_KNEE, R_KNEE], 2].min() > 0.5:
+            upper[int(max(0.0, kp[L_KNEE, 1], kp[R_KNEE, 1])) :] = False  # weiße Socken zählen nicht
+        if upper.sum() > 500:
+            shine = float((gray[upper] > LIMITS["highlight_luma"]).mean())
+            metrics["highlight_share"] = shine
+            if shine > LIMITS["max_highlight_share"]:
+                add("glanzlicht", "Licht zu hart, die Haut glänzt hell. Keine Lampe direkt über dir, lieber weiches Licht von vorn.", GELB)
+        white = white_samples(rgb, person)
+        if len(white):
+            red, blue = float(np.median(white[:, 0])), float(np.median(white[:, 2]))
+            metrics.update(white_red=red, white_blue=blue)
+            if max(abs(math.log(red)), abs(math.log(blue))) > LIMITS["max_color_cast"]:
+                add("farbstich", "Farbiges Licht. Weißes Licht oder Tageslicht nehmen, kein Nachtlicht und keine bunte Lampe.", GELB)
+        feet = _feet_vs_shins(rgb, person, kp)
+        if feet:
+            metrics["foot_chroma_ratio"] = min(f[0] for f in feet)
+            metrics["foot_lightness"] = min(f[1] for f in feet)
+            if all(c < LIMITS["max_foot_chroma"] or dl > LIMITS["max_foot_lightness"] for c, dl in feet):
+                add("socken", "Bitte barfuß: Socken oder Schuhe verdecken die Zehen.", GELB)
 
     # Schärfe im Personenbereich
     ys, xs = np.where(person)
@@ -205,13 +270,14 @@ def sector_of(yaw: float) -> int:
     return int(round((yaw % (2 * math.pi)) / (2 * math.pi) * SECTORS)) % SECTORS
 
 
+# eindeutig je Blickwinkel (vorher hießen 30° und 330° beide „schräg vorn“)
+SECTOR_NAMES = ["vorn", "vorn, leicht rechts", "rechts, leicht vorn", "rechte Seite", "rechts, leicht hinten",
+                "Rücken, leicht rechts", "Rücken", "Rücken, leicht links", "links, leicht hinten", "linke Seite",
+                "links, leicht vorn", "vorn, leicht links"]
+
+
 def sector_name(sector: int) -> str:
-    deg = sector * 360 // SECTORS
-    names = {0: "vorn", 90: "rechte Seite", 180: "Rücken", 270: "linke Seite"}
-    if deg in names:
-        return names[deg]
-    base = min(names, key=lambda d: min(abs(d - deg), 360 - abs(d - deg)))
-    return f"schräg {names[base]}"
+    return SECTOR_NAMES[sector % SECTORS]
 
 
 @dataclasses.dataclass
@@ -242,7 +308,7 @@ def summarize(qualities: list[FrameQuality], min_sectors: int = 8) -> ScanReport
         summary.append("Kein Bild war brauchbar. Bitte Checkliste beachten und neu aufnehmen.")
     missing = [sector_name(i) for i, c in enumerate(covered) if not c]
     if missing:
-        summary.append("Diese Ansichten fehlen noch oder waren nicht brauchbar: " + ", ".join(missing) + ".")
+        summary.append("Diese Ansichten fehlen noch oder waren nicht brauchbar: " + "; ".join(missing) + ".")
     top = sorted(counts.items(), key=lambda kv: -kv[1])[:5]
     for text, n in top:
         summary.append(f"{text} ({n}× im Video)")
@@ -253,9 +319,9 @@ def summarize(qualities: list[FrameQuality], min_sectors: int = 8) -> ScanReport
 
 
 CHECKLIST = [
-    "Eng anliegende Kleidung, keine weiten Ärmel oder Hosen; lange Haare zusammenbinden",
+    "Eng anliegende Kleidung (am besten Shorts), barfuß, ohne Uhr und Schmuck; lange Haare zusammenbinden",
     "Ruhiger, einfarbiger Hintergrund, der sich farblich von Kleidung und Haut abhebt",
-    "Helles, gleichmäßiges Licht von vorn oder oben, kein Fenster oder keine Lampe hinter dir",
+    "Helles, weiches, weißes Licht von vorn (z. B. Tageslicht); keine Lampe direkt über oder hinter dir, kein farbiges Licht",
     "Etwa 2 m Abstand, Handy hochkant auf Hüfthöhe (Stativ), ganzer Körper mit etwas Rand über Kopf und unter Füßen im Bild",
     "A-Pose: Arme gestreckt, etwa 30° vom Körper, Füße schulterbreit, Blick geradeaus",
     "Langsam einmal komplett auf der Stelle drehen (etwa 20 Sekunden für eine Runde)",
