@@ -148,6 +148,25 @@ def _vertex_normals(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
     return out / np.maximum(np.linalg.norm(out, axis=1, keepdims=True), 1e-12)
 
 
+def winding(points: np.ndarray, vertices: np.ndarray, faces: np.ndarray, chunk: int = 512) -> np.ndarray:
+    """Verallgemeinerte Windungszahl des geschlossenen Netzes an points. Auf der Haut ~0.5; steckt
+    ein Hautpunkt in einem anderen Körperteil, kommt dessen Hülle mit 1 dazu (~1.5)."""
+    import torch
+
+    tri = torch.as_tensor(vertices[faces], dtype=torch.float32)
+    pts = torch.as_tensor(points, dtype=torch.float32)
+    out = []
+    with torch.no_grad():
+        for s in range(0, len(pts), chunk):
+            r = tri[None] - pts[s:s + chunk, None, None]  # (P, T, 3, 3)
+            a, b, c = r[..., 0, :], r[..., 1, :], r[..., 2, :]
+            la, lb, lc = a.norm(dim=-1), b.norm(dim=-1), c.norm(dim=-1)
+            num = (a * torch.cross(b, c, dim=-1)).sum(-1)
+            den = la * lb * lc + (a * b).sum(-1) * lc + (a * c).sum(-1) * lb + (b * c).sum(-1) * la
+            out.append(2 * torch.atan2(num, den).sum(1) / (4 * np.pi))
+    return torch.cat(out).double().numpy() if out else np.zeros(0)
+
+
 @dataclasses.dataclass
 class Finding:
     kind: str  # "boden", "geraet", "koerper"
@@ -207,7 +226,8 @@ class Checker:
         return out
 
     def _sink(self, vertices, normals, part: str, other: str, near: np.ndarray, radius: float = 0.06) -> float:
-        """Wie tief Punkte von part (nahe der Schnittstelle) unter der Haut von other liegen."""
+        """Wie tief Punkte von part (nahe der Schnittstelle) in other stecken: Punkte innerhalb der
+        Hülle (Windungszahl > 1), Abstand zum nächsten Hautpunkt von other."""
         from scipy.spatial import cKDTree
 
         mine = np.flatnonzero(self.vertex_part == part)
@@ -216,10 +236,9 @@ class Checker:
         mine = mine[close]
         if len(mine) == 0 or len(theirs) == 0:
             return 0.0
-        _, k = cKDTree(vertices[theirs]).query(vertices[mine])
-        nearest = theirs[k]
-        signed = np.einsum("ij,ij->i", vertices[mine] - vertices[nearest], normals[nearest])
-        return float(max(0.0, -signed.min()))
+        dist, _ = cKDTree(vertices[theirs]).query(vertices[mine])
+        inside = winding(vertices[mine], vertices, self.faces) > 1.0
+        return float(dist[inside].max()) if inside.any() else 0.0
 
     def _grouped(self, kind: str, mask: np.ndarray, depth: np.ndarray, detail: str = "") -> list[Finding]:
         out = []
