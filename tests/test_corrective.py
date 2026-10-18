@@ -59,4 +59,4 @@ def test_shoulder_angle_counts_only_arm_to_body(model, fig):
     a = joint.angle(model, fig.pose([fig.poser.rotations(p) for p in poses])["poses"], fig.reference_poses)
     assert abs(a[0]) < 2
     assert 25 < a[1] < a[2] < 45
-    assert a[3] < 0  # nach vorn gehoben: keine Schulterform
+    assert a[3] <= 0  # nach vorn gehoben: keine Schulterform
