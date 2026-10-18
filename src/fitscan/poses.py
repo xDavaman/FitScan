@@ -43,6 +43,7 @@ _GROUPS = {
     "becken": ("pelvis", "root"),
     "ruecken": ("spine02", "spine03", "spine04"),
     "unterbauch": ("spine05", "spine04"),
+    "bauch": ("spine05", "spine04", "spine03"),
     "brust": ("spine01", "spine02", "breast"),
     "kopf": ("head", "neck"),
     "unterarm": ("lowerarm",),
@@ -389,9 +390,14 @@ def _supine(pitch=-90.0, neck=0.0, hip=0.0, arms=0.0, side=32.0, bend=0.0):
 
 
 def _prone(pitch=90.0, neck=0.0, hip=0.0, arms=0.0, foot=60.0, side=28.0, turn=85.0):
-    return P.pose(None, body=dict(pitch=pitch), spine=dict(neck=neck, turn=turn),
-                  legs=dict(hip=hip, knee=4, foot=foot, out=4),
-                  arms=dict(down=side, fwd=arms, elbow=8, forearm=60))
+    p = P.pose(None, body=dict(pitch=pitch), spine=dict(turn=turn),
+               legs=dict(hip=hip, knee=4, foot=foot, out=4),
+               arms=dict(down=side, fwd=arms, elbow=8, forearm=60))
+    # Kopf zur Seite: der Hals senkt sich unten zur Matte, der Kopf selbst dreht nur, damit die
+    # Wange aufliegt und das Gesicht nicht zum Boden kippt
+    p[("neck01", "vor")] = neck
+    p[("head", "vor")] = 0.0
+    return p
 
 
 def _tree(roll=0.0, out=0.0, hip=40.0, spread=50.0, turn=-60.0, knee=145.0):
@@ -459,8 +465,8 @@ def catalogue() -> dict[str, Spec]:
              dict(pitch=(-100, -80), neck=(-8, 25), hip=(-10, 15), arms=(-20, 10), side=(24, 34), bend=(-20, 5)),
              ("kopf", "ruecken", "gesaess", "ferse", "handballen"), sink=0.008),
         Spec("bauchlage", "Bauchlage, Kopf zur Seite", _prone, dict(pitch=90, neck=0, hip=0, arms=0, foot=60, turn=85),
-             dict(pitch=(80, 100), neck=(-20, 30), hip=(-15, 10), arms=(-10, 25), foot=(30, 80), turn=(70, 95)),
-             ("kopf", "brust", "oberschenkel", "zehen", "handballen"), sink=0.008, soft=("unterbauch", "schienbein")),
+             dict(pitch=(80, 100), neck=(-20, 45), hip=(-15, 10), arms=(-10, 25), foot=(30, 80), turn=(78, 95)),
+             ("kopf", "brust", "oberschenkel", "zehen", "handballen"), sink=0.008, soft=("bauch", "schienbein")),
         Spec("baum", "Yoga: Baum", _tree, dict(roll=0, out=0, hip=40, spread=50, turn=-60, knee=145),
              dict(roll=(-10, 10), out=(-10, 10), hip=(10, 45), spread=(40, 90), turn=(-110, -20), knee=(120, 165)),
              ("ferse.L", "zehen.L"), balance=True, sink=0.002, holds={"ferse.R|oberschenkel.L": 0.0},
