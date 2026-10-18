@@ -1,3 +1,6 @@
 * text=auto
 *.bat text eol=crlf
 *.py text eol=lf
+*.fsan binary
+*.swift text eol=lf
+*.pbxproj text eol=lf
