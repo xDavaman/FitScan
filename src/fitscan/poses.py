@@ -381,16 +381,16 @@ def _sit(knee=90.0, foot=0.0, lean=5.0, arm=20.0, elbow=30.0):
                   arms=dict(down=22, fwd=arm + lean, elbow=elbow, forearm=40, wrist=10), spine=dict(neck=-lean))
 
 
-def _supine(pitch=-90.0, neck=0.0, hip=0.0, arms=0.0):
+def _supine(pitch=-90.0, neck=0.0, hip=0.0, arms=0.0, side=32.0):
     return P.pose(None, body=dict(pitch=pitch), spine=dict(neck=neck),
                   legs=dict(hip=hip, knee=4, foot=30, out=6, turn=-25),
-                  arms=dict(down=32, fwd=arms, elbow=8, forearm=-40))
+                  arms=dict(down=side, fwd=arms, elbow=8, forearm=-40))
 
 
-def _prone(pitch=90.0, neck=0.0, hip=0.0, arms=0.0, foot=60.0):
+def _prone(pitch=90.0, neck=0.0, hip=0.0, arms=0.0, foot=60.0, side=28.0):
     return P.pose(None, body=dict(pitch=pitch), spine=dict(neck=neck, turn=75),
                   legs=dict(hip=hip, knee=4, foot=foot, out=4),
-                  arms=dict(down=32, fwd=arms, elbow=8, forearm=60))
+                  arms=dict(down=side, fwd=arms, elbow=8, forearm=60))
 
 
 def _tree(roll=0.0, out=0.0, hip=40.0, spread=50.0, turn=-60.0, knee=145.0):
@@ -454,8 +454,8 @@ def catalogue() -> dict[str, Spec]:
              touching=(("Hand links", "Oberschenkel links"), ("Hand rechts", "Oberschenkel rechts"),
                        ("Hand links", "Unterschenkel links"), ("Hand rechts", "Unterschenkel rechts"),
                        ("Bauch", "Oberschenkel links"), ("Bauch", "Oberschenkel rechts"))),
-        Spec("rueckenlage", "Rückenlage", _supine, dict(pitch=-90, neck=0, hip=0, arms=0),
-             dict(pitch=(-100, -80), neck=(-15, 25), hip=(-10, 15), arms=(-20, 10)),
+        Spec("rueckenlage", "Rückenlage", _supine, dict(pitch=-90, neck=0, hip=0, arms=0, side=32),
+             dict(pitch=(-100, -80), neck=(-15, 25), hip=(-10, 15), arms=(-20, 10), side=(24, 34)),
              ("kopf", "ruecken", "gesaess", "ferse", "handballen"), sink=0.008),
         Spec("bauchlage", "Bauchlage, Kopf zur Seite", _prone, dict(pitch=90, neck=0, hip=0, arms=0, foot=60),
              dict(pitch=(80, 100), neck=(-20, 20), hip=(-15, 10), arms=(-10, 25), foot=(30, 80)),
