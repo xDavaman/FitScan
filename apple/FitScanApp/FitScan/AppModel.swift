@@ -45,10 +45,15 @@ final class AppModel: ObservableObject {
         progress = 0
         let input = person
         do {
-            let record = try await Task.detached(priority: .userInitiated) { [weak self] in
+            let record = try await Task.detached(priority: .userInitiated) {
                 let result = try model.fitToMeasurements(input) { step, total in
                     let value = Double(step) / Double(total)
-                    if step % 10 == 0 { Task { @MainActor in self?.progress = value } }
+                    if step % 10 == 0 {
+                        // Späte Meldungen nach dem Ende verwerfen, sonst bleibt das Formular im Rechnen-Zustand.
+                        Task { @MainActor in
+                            if self.progress != nil { self.progress = value }
+                        }
+                    }
                 }
                 return try store.save(person: input, result: result, model: model)
             }.value

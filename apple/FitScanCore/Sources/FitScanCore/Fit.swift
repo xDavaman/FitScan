@@ -24,7 +24,7 @@ public struct Person: Codable, Hashable {
         if !(30...250).contains(w) { problems.append("Bitte das Gewicht in kg angeben (30 bis 250).") }
         for key in MeasureKey.circumferences {
             if let v = measures[key], !(15...220).contains(v) {
-                problems.append("Der Wert für \(key.label) (\(Int(v)) cm) wirkt unplausibel.")
+                problems.append("Der Wert für \(key.label) (\(String(format: "%.0f", v)) cm) wirkt unplausibel.")
             }
         }
         if h > 0, let inseam = measures[.inseam], !((0.3 * h)...(0.6 * h)).contains(inseam) {

@@ -59,7 +59,7 @@ struct ContentView: View {
                         }
                     }
                     .onDelete { offsets in
-                        for i in offsets { app.delete(app.scans[i]) }
+                        offsets.map { app.scans[$0] }.forEach { app.delete($0) }
                     }
                 }
             }

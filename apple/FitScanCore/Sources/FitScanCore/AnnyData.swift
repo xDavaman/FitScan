@@ -78,6 +78,9 @@ public final class AnnyData {
         }
         let version = u32(4), jsonLength = u32(8), payloadLength = u32(12), packedLength = u32(16)
         guard version == 1 else { throw FitScanError.data("Unbekannte Version \(version) der Anny-Datei.") }
+        guard 20 + jsonLength <= raw.count else {
+            throw FitScanError.data("Anny-Datei ist beschädigt (Kopf zu lang).")
+        }
         let jsonStart = raw.startIndex + 20
         let jsonData = raw.subdata(in: jsonStart..<(jsonStart + jsonLength))
         let body = raw.subdata(in: (jsonStart + jsonLength)..<raw.endIndex)

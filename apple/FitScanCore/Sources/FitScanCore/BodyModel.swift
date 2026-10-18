@@ -95,7 +95,7 @@ public final class BodyModel {
         let (cols, slopes) = phenotypeColumns(phenotype)
         guard let slope = slopes[feature] else { return [] }
         let mc = data.maskColumns
-        var out: [(Int, Double)] = []
+        var out: [(shape: Int, value: Double)] = []
         for j in 0..<data.numMacroShapes {
             var d = 0.0
             for i in 0..<mc where data.phenotypeMask[j * mc + i] != 0 && slope[i] != 0 {

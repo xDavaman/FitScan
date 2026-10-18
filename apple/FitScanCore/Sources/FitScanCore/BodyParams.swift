@@ -137,7 +137,7 @@ enum Npy {
     static func read(_ url: URL) throws -> [Double] {
         let data = try Data(contentsOf: url)
         let bytes = [UInt8](data)
-        guard bytes.count > 10, bytes[0] == 0x93, Array(bytes[1..<6]) == Array("NUMPY".utf8) else {
+        guard bytes.count > 12, bytes[0] == 0x93, Array(bytes[1..<6]) == Array("NUMPY".utf8) else {
             throw FitScanError.data("\(url.lastPathComponent) ist keine .npy-Datei.")
         }
         let major = bytes[6]
@@ -149,6 +149,9 @@ enum Npy {
         } else {
             headerLength = Int(bytes[8]) | Int(bytes[9]) << 8 | Int(bytes[10]) << 16 | Int(bytes[11]) << 24
             start = 12
+        }
+        guard start + headerLength <= bytes.count else {
+            throw FitScanError.data("\(url.lastPathComponent) ist beschädigt.")
         }
         let header = String(decoding: bytes[start..<(start + headerLength)], as: UTF8.self)
         guard !header.contains("'fortran_order': True") else {

@@ -25,8 +25,11 @@ struct BodySceneView: View {
 
     init(mesh: BodyMesh) {
         self.mesh = mesh
-        _scene = State(initialValue: Self.makeScene(mesh))
-        _pointOfView = State(initialValue: Self.camera(mesh))
+        let scene = Self.makeScene(mesh)
+        let camera = Self.camera(mesh)
+        scene.rootNode.addChildNode(camera)
+        _scene = State(initialValue: scene)
+        _pointOfView = State(initialValue: camera)
     }
 
     var body: some View {
