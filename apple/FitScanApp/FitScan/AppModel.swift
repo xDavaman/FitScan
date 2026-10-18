@@ -1,6 +1,11 @@
 import Foundation
 import FitScanCore
 
+extension Locale {
+    /// Die Oberfläche ist deutsch, Zahlen daher immer mit Dezimalkomma, unabhängig von der Region des Geräts.
+    static let deutsch = Locale(identifier: "de_DE")
+}
+
 /// Zustand der App: Annys Daten, gespeicherte Scans und die laufende Berechnung.
 @MainActor
 final class AppModel: ObservableObject {

@@ -67,8 +67,8 @@ struct ContentView: View {
     }
 
     private func summary(_ r: ScanRecord) -> String {
-        let h = r.measures[.height].map { String(format: "%.0f cm", $0) } ?? "–"
-        let w = r.measures[.weight].map { String(format: "%.1f kg", $0) } ?? "–"
+        let h = r.measures[.height].map { String(format: "%.0f cm", locale: .deutsch, $0) } ?? "–"
+        let w = r.measures[.weight].map { String(format: "%.1f kg", locale: .deutsch, $0) } ?? "–"
         return "\(h), \(w)"
     }
 }

@@ -29,7 +29,8 @@ ergibt dieselben Maße wie der PC.
 
 ## Auf dem Mac bauen und testen
 
-Voraussetzung: Xcode 16 oder neuer.
+Voraussetzung: Xcode 16 oder neuer. Zuletzt geprüft am 18.10.2026 mit Xcode 27 im Simulator: 9 von 9 Tests grün,
+Anpassung 0,4 bis 0,8 s, das geteilte GLB ist gültig und lässt sich in Blender importieren und bewegen.
 
 ```bash
 cd apple/FitScanCore
@@ -37,10 +38,11 @@ swift test -c release          # Tests gegen den PC, im Release-Modus deutlich s
 
 cd ../FitScanApp
 xcodebuild -project FitScan.xcodeproj -scheme FitScan \
-  -destination 'platform=iOS Simulator,name=iPhone 16' build
+  -destination 'generic/platform=iOS Simulator' build
 ```
 
-Danach im Simulator: Modell aus Maßen berechnen, 3D-Vorschau drehen, GLB teilen. Für das eigene iPhone
+Danach in Xcode ein beliebiges aktuelles iPhone als Simulator wählen (`xcrun simctl list devices available`
+zeigt, welche installiert sind), Modell aus Maßen berechnen, 3D-Vorschau drehen, GLB teilen. Für das eigene iPhone
 in Xcode unter *Signing & Capabilities* das Team des Apple-Entwicklerkontos wählen. Die Bundle-ID ist
 `com.xdavaman.fitscan`.
 

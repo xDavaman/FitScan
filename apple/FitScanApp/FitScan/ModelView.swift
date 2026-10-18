@@ -28,9 +28,9 @@ struct ModelView: View {
                     if let value = record.measures[key] {
                         LabeledContent(key.label) {
                             HStack(spacing: 6) {
-                                Text(String(format: "%.1f %@", value, key.unit))
+                                Text(String(format: "%.1f %@", locale: .deutsch, value, key.unit))
                                 if let target = record.person.measures[key], target > 0 {
-                                    Text(String(format: "(Eingabe %.1f)", target))
+                                    Text(String(format: "(Eingabe %.1f)", locale: .deutsch, target))
                                         .foregroundStyle(.secondary)
                                 }
                             }
