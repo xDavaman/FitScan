@@ -725,7 +725,9 @@ def sit_down(fig: P.Figure, seated: Still, reps: int = 2):
 
 def squat(fig: P.Figure, deep: Still, reps: int = 2):
     """In die tiefe Hocke und wieder hoch, Fersen bleiben am Boden."""
-    stand = blend(P.stand(), deep.pose, 0.0)
+    # Füße stehen schon wie in der Hocke (breiter, Spitzen nach außen): die Oberschenkel liegen
+    # weiter außen, die Hände hängen deshalb etwas weiter vom Körper weg als im normalen Stehen
+    stand = P.pose(blend(P.stand(), deep.pose, 0.0), arms=dict(down=34, fwd=3, elbow=12))
     mid = _lean(blend(stand, deep.pose, 0.5), 12)
     keys, t = _reps(stand, mid, deep.pose, reps, down=1.8, hold=1.5, up=1.6, at=0.5)
     return flow(fig, "Hocke", keys, deep, [(0.0, t + 1, "Tiefe Hocke: runter und hoch, Fersen bleiben am Boden")])
