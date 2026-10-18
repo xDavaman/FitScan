@@ -458,27 +458,33 @@ def pullup(fig: P.Figure, reps: int = 2, clearance: float = 0.12) -> Exercise:
     return _finish(fig, ex, frames, root)
 
 
-def preview(fig: P.Figure, ex: Exercise, glb, video, still=None, camera=(2.6, -3.0, 0.6)) -> None:
-    """Vorschauvideo mit Haut über Blender (nur als externes Programm)."""
+def preview(fig: P.Figure, ex: Exercise, glb, video, still=None, camera=(2.6, -3.0, 0.6), views=None,
+            stills=None) -> None:
+    """Vorschauvideo mit Haut über Blender (nur als externes Programm). video=None: nur Standbilder.
+    views: je Bild Blickpunkt und Kamerarichtung (F, 2, 3), sonst eine Kamera für den ganzen Ablauf."""
     import subprocess
     import tempfile
     from pathlib import Path
 
     from .blender import find_blender
 
-    cyl = np.array([[np.concatenate([s.centre, s.axis * s.half_length, [s.radius]])
-                     for prop, mats in ex.props for s in prop.placed(mats[i])] for i in range(len(ex.rotations))])
     n = len(ex.rotations)
+    placed = [[s for prop, mats in ex.props for s in prop.placed(mats[i])] for i in range(n)]
+    cyl = np.array([[np.concatenate([s.centre, s.axis * s.half_length, [s.radius]])
+                     for s in shapes if isinstance(s, contact.Cylinder)] for shapes in placed]).reshape(n, -1, 7)
+    box = np.array([[np.concatenate([s.centre, s.rotation.ravel(), s.half])
+                     for s in shapes if isinstance(s, contact.Box)] for shapes in placed]).reshape(n, -1, 15)
     with tempfile.TemporaryDirectory() as tmp:
         data = Path(tmp) / "uebung.npz"
+        extra = {} if views is None else {"views": np.asarray(views, float)}
         np.savez(data, vertices=ex.vertices.astype(np.float32), rest=fig._rest_v[0].numpy(), cylinders=cyl,
-                 fps=ex.fps, captions=np.array(ex.captions, dtype=object), stills=[n // 6, n // 3, n // 2],
-                 camera=np.array(camera))
+                 boxes=box, fps=ex.fps, captions=np.array(ex.captions, dtype=object),
+                 stills=stills if stills is not None else [n // 6, n // 3, n // 2], camera=np.array(camera), **extra)
         script = Path(__file__).with_name("blender_preview.py")
         blender = find_blender()
         if blender is None:
             raise RuntimeError("Blender nicht gefunden.")
-        args = [str(blender), "-b", "-P", str(script), "--", str(glb), str(data), str(video)]
+        args = [str(blender), "-b", "-P", str(script), "--", str(glb), str(data), str(video or "-")]
         if still:
             args.append(str(still))
         subprocess.run(args, check=True, capture_output=True)

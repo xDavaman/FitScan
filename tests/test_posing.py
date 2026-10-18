@@ -46,6 +46,16 @@ def test_directions(model, fig):
     assert up[wrist, 1, 3] < rest[wrist, 1, 3] - 0.3  # Arm nach vorn gehoben
 
 
+def test_turn_is_mirrored(model, fig):
+    """Gleiche Werte drehen links und rechts spiegelbildlich (Fußspitzen beide nach außen)."""
+    po = fig.pose([fig.poser.rotations(P.pose(None, legs=dict(turn=-30), arms=dict(forearm=60)))])["poses"][0]
+    for s in P.SIDES:
+        foot = po[model.bone(f"toe3-1.{s}"), :3, 3] - po[model.bone(f"foot.{s}"), :3, 3]
+        assert foot[0] * (1 if s == "L" else -1) > 0.3 * np.linalg.norm(foot)
+    a, b = (po[model.bone(f"finger2-1.{s}"), :3, 3] for s in P.SIDES)
+    assert a[0] == pytest.approx(-b[0], abs=0.01) and a[1:] == pytest.approx(b[1:], abs=0.01)
+
+
 def test_quaternions_roundtrip(fig):
     rots = fig.poser.rotations(P.pose(None, body=dict(pitch=20), arm_R=dict(elbow=70)))
     q = fig.poser.quaternions(rots)

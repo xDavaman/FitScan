@@ -32,6 +32,21 @@ class Joint:
     def angle(self, model, poses: np.ndarray, reference: np.ndarray) -> np.ndarray:
         """Beugewinkel je Bild aus den Knochenlagen (F, J, 4, 4)."""
         s = self.side
+        if self.name == "schulter":
+            chest, a, b = (model.bone(n) for n in ("spine01", f"upperarm01.{s}", f"lowerarm01.{s}"))
+            # Oberarm im Brustkorb: Schwenk zur Seite in der Körperebene (über die Senkrechte
+            # hinaus weiter zählend), gemessen ab der Bezugshaltung (A-Pose). Nach vorn gehoben
+            # (ab 20 Grad, ganz ab 45 Grad) zählt nicht: dort berührt der Arm den Rumpf nicht.
+            turn = np.einsum("fij,jk->fik", poses[:, chest, :3, :3], reference[chest, :3, :3].T)
+            axes = np.array([[0, 0, -1.0], [1.0 if s == "L" else -1.0, 0, 0], [0, -1.0, 0]])
+            down, side, fwd = (np.einsum("fij,j->fi", turn, x) for x in axes)
+            arm = poses[:, b, :3, 3] - poses[:, a, :3, 3]
+            arm = arm / np.linalg.norm(arm, axis=1, keepdims=True)
+            ref = reference[b, :3, 3] - reference[a, :3, 3]
+            ref_angle = np.degrees(np.arctan2(ref @ axes[1], ref @ axes[0]))
+            swing = np.degrees(np.arctan2(np.einsum("fi,fi->f", arm, side), np.einsum("fi,fi->f", arm, down)))
+            lift = np.degrees(np.arcsin(np.clip(np.einsum("fi,fi->f", arm, fwd), -1, 1)))
+            return (ref_angle - swing) * np.clip(1 - (np.abs(lift) - 20) / 25, 0, 1)
         if self.name == "huefte":
             pelvis, a, b = (model.bone(n) for n in ("root", f"upperleg01.{s}", f"lowerleg01.{s}"))
             rest = reference[b, :3, 3] - reference[a, :3, 3]
@@ -39,7 +54,8 @@ class Joint:
             down = np.einsum("fij,jk,k->fi", poses[:, pelvis, :3, :3], reference[pelvis, :3, :3].T, rest)
             thigh = poses[:, b, :3, 3] - poses[:, a, :3, 3]
         else:
-            a, b, c = (model.bone(f"{n}.{s}") for n in ("upperarm01", "lowerarm01", "wrist"))
+            chain = ("upperleg01", "lowerleg01", "foot") if self.name == "knie" else ("upperarm01", "lowerarm01", "wrist")
+            a, b, c = (model.bone(f"{n}.{s}") for n in chain)
             down = poses[:, b, :3, 3] - poses[:, a, :3, 3]
             thigh = poses[:, c, :3, 3] - poses[:, b, :3, 3]
         cos = np.einsum("fi,fi->f", down, thigh) / np.linalg.norm(down, axis=1) / np.linalg.norm(thigh, axis=1)
@@ -57,6 +73,10 @@ class Joint:
         """Haltung zum Berechnen der Form: nur dieses Gelenk auf dieser Seite gebeugt."""
         if self.name == "huefte":  # beide Beine: der Bauch liegt dann zwischen beiden Oberschenkeln
             return P.pose(P.stand(), legs=dict(hip=angle, knee=min(angle, 100), out=4, turn=-8))
+        if self.name == "knie":  # Oberschenkel waagerecht, Wade legt sich an
+            return P.pose(P.stand(), **{f"leg_{self.side}": dict(hip=90, knee=angle, out=4, turn=-8)})
+        if self.name == "schulter":  # Arm hängt seitlich am Körper, Hand am Oberschenkel
+            return P.pose(P.stand(), **{f"arm_{self.side}": dict(down=angle, fwd=3, elbow=12)})
         return P.pose(P.stand(), **{f"arm_{self.side}": dict(down=24, fwd=10, elbow=angle)})
 
 
@@ -68,6 +88,13 @@ def joints() -> list[Joint]:
                          (30.0, 45.0, 60.0, 75.0, 90.0, 105.0, 120.0, 135.0)))
         out.append(Joint("ellbogen", s, [(f"Oberarm {seite}", f"Unterarm {seite}")],
                          (60.0, 80.0, 100.0, 120.0, 135.0, 150.0)))
+        out.append(Joint("knie", s, [(f"Oberschenkel {seite}", f"Unterschenkel {seite}")],
+                         (90.0, 110.0, 125.0, 140.0, 150.0, 160.0)))
+        out.append(Joint("schulter", s, [(f"Oberarm {seite}", "Brust"), (f"Oberarm {seite}", "Bauch"),
+                                         (f"Unterarm {seite}", "Bauch"), (f"Unterarm {seite}", f"Becken {seite}"),
+                                         (f"Unterarm {seite}", f"Oberschenkel {seite}"),
+                                         (f"Hand {seite}", f"Oberschenkel {seite}"), (f"Hand {seite}", f"Becken {seite}")],
+                         (15.0, 25.0, 30.0, 35.0, 40.0, 45.0)))
     return out
 
 
@@ -112,8 +139,21 @@ def _pushes(vertices, normals, faces, parts, pairs, radius=0.06):
     return push, hit
 
 
+def relax(lap, delta: np.ndarray, region: np.ndarray, iterations: int = 10) -> np.ndarray:
+    """Verschiebung im Bereich region glätten (je Schritt halb zum Mittel der Nachbarn): benachbarte
+    Punkte, die in einer Falte verschieden weit geschoben wurden, sollen keine Zacken bilden."""
+    from scipy import sparse
+
+    deg = lap.diagonal()
+    avg = sparse.diags(1.0 / np.maximum(deg, 1)) @ (sparse.diags(deg) - lap)
+    out = delta.copy()
+    for _ in range(iterations):
+        out[region] = 0.5 * out[region] + 0.5 * (avg @ out)[region]
+    return out
+
+
 def solve_shape(model, skinned: np.ndarray, pairs, rest: np.ndarray, steps: int = 8,
-                smooth: float = 1.0) -> np.ndarray:
+                smooth: float = 1.0, relaxing: int = 10) -> np.ndarray:
     """Weltverschiebung je Punkt (V, 3), die die Teile in pairs auseinanderlegt und glatt ausläuft.
     rest: dieselben Punkte in der Bezugshaltung (dort berührt sich nichts)."""
     from scipy import sparse
@@ -150,6 +190,8 @@ def solve_shape(model, skinned: np.ndarray, pairs, rest: np.ndarray, steps: int 
         lhs = (smooth * lr + 10.0 * c.T @ c).tocsc()  # harmonisch: kein Überschwingen
         for d in range(3):
             delta[r, d] = spsolve(lhs, 10.0 * c.T @ goal[:, d])
+        if relaxing:
+            delta = relax(lap, delta, r, relaxing)
     return delta
 
 
@@ -194,7 +236,7 @@ class Correctives:
     def build(cls, fig: P.Figure) -> Correctives:
         shapes = {}
         for j in joints():
-            got = build(fig, j)
+            got = build(fig, j, step=2.5 if j.name == "schulter" else 5.0)
             angles = np.array(sorted(got))
             shapes[f"{j.name}.{j.side}"] = (angles, np.stack([got[a] for a in angles]).astype(np.float32))
         return cls(fig.model, fig.reference_poses, shapes)
