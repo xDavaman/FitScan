@@ -34,14 +34,19 @@ class Joint:
         s = self.side
         if self.name == "schulter":
             chest, a, b = (model.bone(n) for n in ("spine01", f"upperarm01.{s}", f"lowerarm01.{s}"))
-            # Oberarm gegen die Richtung nach unten im Brustkorb: wie weit er aus der Bezugshaltung
-            # (A-Pose) zum Körper hin geschwenkt ist; nach vorn oder oben gehoben zählt nicht
-            ref = reference[b, :3, 3] - reference[a, :3, 3]
-            ref_angle = np.degrees(np.arccos(-ref[2] / np.linalg.norm(ref)))
-            down = np.einsum("fij,jk,k->fi", poses[:, chest, :3, :3], reference[chest, :3, :3].T, [0, 0, -1.0])
+            # Oberarm im Brustkorb: Schwenk zur Seite in der Körperebene (über die Senkrechte
+            # hinaus weiter zählend), gemessen ab der Bezugshaltung (A-Pose). Nach vorn gehoben
+            # (ab 20 Grad, ganz ab 45 Grad) zählt nicht: dort berührt der Arm den Rumpf nicht.
+            turn = np.einsum("fij,jk->fik", poses[:, chest, :3, :3], reference[chest, :3, :3].T)
+            axes = np.array([[0, 0, -1.0], [1.0 if s == "L" else -1.0, 0, 0], [0, -1.0, 0]])
+            down, side, fwd = (np.einsum("fij,j->fi", turn, x) for x in axes)
             arm = poses[:, b, :3, 3] - poses[:, a, :3, 3]
-            cos = np.einsum("fi,fi->f", down, arm) / np.linalg.norm(arm, axis=1)
-            return ref_angle - np.degrees(np.arccos(np.clip(cos, -1, 1)))
+            arm = arm / np.linalg.norm(arm, axis=1, keepdims=True)
+            ref = reference[b, :3, 3] - reference[a, :3, 3]
+            ref_angle = np.degrees(np.arctan2(ref @ axes[1], ref @ axes[0]))
+            swing = np.degrees(np.arctan2(np.einsum("fi,fi->f", arm, side), np.einsum("fi,fi->f", arm, down)))
+            lift = np.degrees(np.arcsin(np.clip(np.einsum("fi,fi->f", arm, fwd), -1, 1)))
+            return (ref_angle - swing) * np.clip(1 - (np.abs(lift) - 20) / 25, 0, 1)
         if self.name == "huefte":
             pelvis, a, b = (model.bone(n) for n in ("root", f"upperleg01.{s}", f"lowerleg01.{s}"))
             rest = reference[b, :3, 3] - reference[a, :3, 3]
@@ -231,7 +236,7 @@ class Correctives:
     def build(cls, fig: P.Figure) -> Correctives:
         shapes = {}
         for j in joints():
-            got = build(fig, j)
+            got = build(fig, j, step=2.5 if j.name == "schulter" else 5.0)
             angles = np.array(sorted(got))
             shapes[f"{j.name}.{j.side}"] = (angles, np.stack([got[a] for a in angles]).astype(np.float32))
         return cls(fig.model, fig.reference_poses, shapes)
