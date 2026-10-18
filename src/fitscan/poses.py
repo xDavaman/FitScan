@@ -384,13 +384,13 @@ def _sit(knee=90.0, foot=0.0, lean=5.0, arm=20.0, elbow=30.0):
 def _supine(pitch=-90.0, neck=0.0, hip=0.0, arms=0.0):
     return P.pose(None, body=dict(pitch=pitch), spine=dict(neck=neck),
                   legs=dict(hip=hip, knee=4, foot=30, out=6, turn=-25),
-                  arms=dict(down=38, fwd=arms, elbow=8, forearm=-40))
+                  arms=dict(down=32, fwd=arms, elbow=8, forearm=-40))
 
 
 def _prone(pitch=90.0, neck=0.0, hip=0.0, arms=0.0, foot=60.0):
     return P.pose(None, body=dict(pitch=pitch), spine=dict(neck=neck, turn=75),
                   legs=dict(hip=hip, knee=4, foot=foot, out=4),
-                  arms=dict(down=38, fwd=arms, elbow=8, forearm=60))
+                  arms=dict(down=32, fwd=arms, elbow=8, forearm=60))
 
 
 def _tree(roll=0.0, out=0.0, hip=40.0, spread=50.0, turn=-60.0, knee=145.0):
