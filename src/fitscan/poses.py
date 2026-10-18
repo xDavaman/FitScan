@@ -384,13 +384,13 @@ def _sit(knee=90.0, foot=0.0, lean=5.0, arm=20.0, elbow=30.0):
 def _supine(pitch=-90.0, neck=0.0, hip=0.0, arms=0.0):
     return P.pose(None, body=dict(pitch=pitch), spine=dict(neck=neck),
                   legs=dict(hip=hip, knee=4, foot=30, out=6, turn=-25),
-                  arms=dict(down=20, fwd=arms, elbow=8, forearm=-40))
+                  arms=dict(down=38, fwd=arms, elbow=8, forearm=-40))
 
 
 def _prone(pitch=90.0, neck=0.0, hip=0.0, arms=0.0, foot=60.0):
     return P.pose(None, body=dict(pitch=pitch), spine=dict(neck=neck, turn=75),
                   legs=dict(hip=hip, knee=4, foot=foot, out=4),
-                  arms=dict(down=24, fwd=arms, elbow=8, forearm=60))
+                  arms=dict(down=38, fwd=arms, elbow=8, forearm=60))
 
 
 def _tree(roll=0.0, out=0.0, hip=40.0, spread=50.0, turn=-60.0, knee=145.0):
@@ -427,7 +427,7 @@ def _child(pitch=115.0, hip=145.0, knee=160.0, neck=10.0, arms=165.0, foot=60.0,
 
 def _cobra(bend=-40.0, arms=10.0, elbow=70.0, wrist=-70.0, pitch=90.0, forearm=-45.0):
     return P.pose(None, body=dict(pitch=pitch), legs=dict(knee=0, foot=60, out=3), spine=dict(bend=bend, neck=-15),
-                  arms=dict(down=25, fwd=arms, elbow=elbow, forearm=forearm, wrist=wrist))
+                  arms=dict(down=32, fwd=arms, elbow=elbow, forearm=forearm, wrist=wrist))
 
 
 def _squat(pitch=40.0, hip=140.0, foot=-40.0):
@@ -438,7 +438,7 @@ def _squat(pitch=40.0, hip=140.0, foot=-40.0):
 def _lunge(front=125.0, back_hip=-30.0, back_knee=95.0, foot_f=-35.0, foot_b=-50.0, hip=95.0):
     return P.pose(None, leg_L=dict(hip=hip, knee=front, foot=foot_f, turn=-4),
                   leg_R=dict(hip=back_hip, knee=back_knee, foot=foot_b, turn=-4),
-                  arms=dict(down=30, elbow=10))
+                  arms=dict(down=38, fwd=3, elbow=12))
 
 
 def _fold(pitch=90.0, bend=40.0, arms=135.0, foot=0.0):

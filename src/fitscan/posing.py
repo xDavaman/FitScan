@@ -184,7 +184,7 @@ def body(pose: dict, pitch: float = 0, yaw: float = 0, roll: float = 0) -> dict:
 def stand() -> dict:
     p: dict = {}
     for s in SIDES:
-        arm(p, s, down=32, fwd=5, elbow=12)
+        arm(p, s, down=38, fwd=3, elbow=12)  # Arme hängen locker am Körper, Hände am Oberschenkel
         leg(p, s, hip=2, knee=3)
     spine(p)
     return body(p)
