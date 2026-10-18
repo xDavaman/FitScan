@@ -531,29 +531,138 @@ def _surfaces(ex, i: int) -> list:
     return out
 
 
+LEG_DOF = (("upperleg01", "vor"), ("upperleg01", "spreizen"), ("upperleg01", "dreh"), ("lowerleg01", "beugen"),
+           ("foot", "runter"), ("foot", "aussen"))
+
+
+def _rotvec(r: np.ndarray) -> np.ndarray:
+    """Drehvektor (Achse * Winkel im Bogenmaß) einer 3x3-Drehung."""
+    axis = np.array([r[2, 1] - r[1, 2], r[0, 2] - r[2, 0], r[1, 0] - r[0, 1]])
+    s = np.linalg.norm(axis)
+    angle = np.arctan2(s / 2, (np.trace(r) - 1) / 2)
+    return axis * (angle / s) if s > 1e-12 else np.zeros(3)
+
+
+def _bones(fig: P.Figure, poses: list[dict]) -> np.ndarray:
+    """Weltlage aller Knochen (N, J, 4, 4), Wurzel im Ursprung, ohne Haut."""
+    import torch
+
+    mats = np.stack([fig.poser.matrices(fig.poser.rotations(p)) for p in poses])
+    with torch.no_grad():
+        _, bone_poses = fig.model.anny.get_bone_transforms(torch.as_tensor(mats, dtype=torch.float32),
+                                                           fig._rest_p)
+    return bone_poses.double().numpy()
+
+
+def _with(pose: dict, keys: list, x: np.ndarray) -> dict:
+    out = dict(pose)
+    out.update(zip(keys, x[:-1], strict=True))
+    return out
+
+
+def _foot_error(bones: np.ndarray, foot: list[int], shift: np.ndarray, feet: np.ndarray) -> np.ndarray:
+    """Abstand der Füße zu ihrer Stelle: Lage in cm, Richtung in 1/10 rad."""
+    r = []
+    for k, j in enumerate(foot):
+        r += list((bones[j][:3, 3] + shift - feet[k][:3, 3]) * 100)
+        r += list(_rotvec(feet[k][:3, :3] @ bones[j][:3, :3].T) * 10)
+    return np.array(r)
+
+
+def plant_legs(fig: P.Figure, poses: list[dict], root: np.ndarray, feet: np.ndarray,
+               iterations: int = 12) -> tuple[list[dict], np.ndarray, float]:
+    """Beine je Bild so beugen, dass beide Füße genau an ihrer Stelle stehen (Lage und Richtung wie in
+    feet: (2, 4, 4) Weltlage von foot.L/foot.R). Frei sind je Bein Hüfte (3), Knie und Sprunggelenk (2)
+    sowie die Höhe der Hüfte; die Haltung weicht so wenig wie möglich von der gewünschten ab.
+    Rückgabe: Haltungen, Wurzelverschiebung (F, 3), größte Abweichung der Füße (m)."""
+    keys = [(f"{b}.{s}", d) for s in P.SIDES for b, d in LEG_DOF]
+    foot = [fig.poser.index[f"foot.{s}"] for s in P.SIDES]
+    n = len(keys) + 1
+    scale = np.array([1.0] * len(keys) + [0.01])  # Schritt: Grad bzw. cm
+    weight = np.array([0.01] * len(keys) + [0.03]) / scale  # Abweichung von der Wunschhaltung
+    out, roots, worst = [], root.astype(float).copy(), 0.0
+    previous = None
+    for i, want in enumerate(poses):
+        goal = np.array([want.get(k, 0.0) for k in keys] + [root[i, 2]])
+        x = goal.copy()
+        if previous is not None:  # vom letzten Bild aus weiter (Hüfthöhe als Abstand zur Wunschhöhe)
+            x[:-1], x[-1] = previous[:-1], goal[-1] + previous[-1]
+
+        def residual(x, bones, i=i, goal=goal):
+            shift = np.array([root[i, 0], root[i, 1], x[-1]])
+            return np.concatenate([_foot_error(bones, foot, shift, feet), (x - goal) * weight])
+
+        damping = 1e-2
+        for _ in range(iterations):
+            trials = [x] + [x + np.eye(n)[k] * scale[k] * 0.5 for k in range(n)]
+            bones = _bones(fig, [_with(want, keys, t) for t in trials])
+            r0 = residual(x, bones[0])
+            jac = np.stack([(residual(trials[k + 1], bones[k + 1]) - r0) / (scale[k] * 0.5) for k in range(n)], 1)
+            h = jac.T @ jac
+            step = -np.linalg.solve(h + damping * np.diag(np.diag(h) + 1e-9), jac.T @ r0)
+            new = x + step
+            r1 = residual(new, _bones(fig, [_with(want, keys, new)])[0])
+            if r1 @ r1 < r0 @ r0:
+                x, damping = new, damping * 0.3
+            else:
+                damping *= 10
+            if np.abs(step / scale).max() < 0.05:
+                break
+        r = residual(x, _bones(fig, [_with(want, keys, x)])[0])
+        worst = max(worst, float(np.abs(r[[0, 1, 2, 6, 7, 8]]).max()) / 100)
+        out.append(_with(want, keys, x))
+        roots[i, 2] = x[-1]
+        previous = np.concatenate([x[:-1], [x[-1] - goal[-1]]])
+    return out, roots, worst
+
+
+def stand_over(fig: P.Figure, poses: list[dict], root: np.ndarray, feet: np.ndarray, centre: np.ndarray,
+               rounds: int = 3) -> tuple[list[dict], np.ndarray, float]:
+    """Füße festhalten (plant_legs) und die Hüfte waagerecht so verschieben, dass der Schwerpunkt über
+    centre (Mitte der Standfläche, xy) liegt: niemand kippt beim Hinsetzen oder in der Hocke."""
+    root = root.astype(float).copy()
+    for _ in range(rounds):
+        legs, root, worst = plant_legs(fig, poses, root, feet)
+        v = fig.pose([fig.poser.rotations(p) for p in legs])["vertices"] + root[:, None]
+        com = np.stack([centre_of_mass(x, fig.model.faces) for x in v])
+        root[:, :2] += centre[:2] - com[:, :2]
+    legs, root, worst = plant_legs(fig, poses, root, feet)
+    return legs, root, worst
+
+
 def flow(fig: P.Figure, name: str, keys: list[tuple[float, dict]], still: Still, captions: list,
-         sink: float = 0.0, props=(), place=None):
-    """Bewegung aus Schlüsselhaltungen mit stehenden Füßen (Sohlen bleiben, wo sie in Bild 0 stehen).
-    Die Schlüssel tragen ihren Fortschritt zur Zielhaltung (PROGRESS); danach richten sich die
-    Berührungsformen. Wo die Haut in Boden oder Bank steckt, gibt sie in jedem Bild nach.
-    place(root, vertices) -> Geräte, wenn sie von der Lage der Füße abhängen."""
+         props=(), balanced: Callable[[np.ndarray], np.ndarray] | None = None):
+    """Bewegung aus Schlüsselhaltungen mit stehenden Füßen: Die Füße stehen in jedem Bild genau dort,
+    wo sie in der Zielhaltung still stehen (die Beine werden passend gebeugt), und der Schwerpunkt liegt
+    über den Füßen. balanced(progress) -> Anteil 0..1, wie weit das Gleichgewicht gilt (beim Sitzen
+    trägt die Bank). Die Schlüssel tragen ihren Fortschritt zur Zielhaltung (PROGRESS); danach richten
+    sich die Berührungsformen. Wo die Haut in Boden oder Bank steckt, gibt sie in jedem Bild nach."""
     from . import gym
 
     times = gym.frames_between(keys[-1][0])
     sampled = P.sample(keys, times)
     progress = np.array([p.pop(PROGRESS, 0.0) for p in sampled])
-    frames = [fig.poser.rotations(p) for p in sampled]
+    first = fig.pose([fig.poser.rotations(p) for p in sampled])["vertices"]
+    root = gym.plant_feet(fig, first)
+    top = int(np.argmax(progress))
+    root += still.root - root[top]
+    feet = still.poses[[fig.poser.index[f"foot.{s}"] for s in P.SIDES]]
+    centre = gym._sole_centre(fig, still.vertices)
+    share = np.ones(len(times)) if balanced is None else balanced(progress)
+    legs, planted, worst = stand_over(fig, sampled, root, feet, centre)
+    root[:, 2] = planted[:, 2]
+    root[:, :2] += share[:, None] * (planted[:, :2] - root[:, :2])
+    if (share < 1).any():  # wo die Bank trägt, gilt die Hüftlage aus den Schlüsseln: Beine neu
+        legs, root, worst = plant_legs(fig, sampled, root, feet)
+    frames = [fig.poser.rotations(p) for p in legs]
     poses = fig.pose(frames)["poses"]
     offsets = still.along(progress)
     if fig.correctives is not None:
         offsets += fig.correctives.offsets(poses)
     out = fig.pose(frames, offsets=offsets, transforms=True)
-    root = gym.plant_feet(fig, out["vertices"])
-    root[:, 2] -= sink  # Sohlen geben etwas nach
-    if place is not None:
-        props = place(root, out["vertices"])
     contacts = {f"foot.{s}": np.ones(len(times), bool) for s in P.SIDES}
     ex = gym.Exercise(name, gym.FPS, frames, root, list(props), [], contacts, captions)
+    ex.foot_error = worst
     v = out["vertices"] + root[:, None]
     for i in range(len(frames)):
         surfaces = _surfaces(ex, i)
@@ -608,14 +717,10 @@ def sit_down(fig: P.Figure, seated: Still, reps: int = 2):
     mid = _lean(blend(stand, seated.pose, 0.7), 22)
     keys, t = _reps(stand, mid, seated.pose, reps, down=1.6, hold=1.4, up=1.6, at=0.7)
 
-    def place(root, vertices):
-        # Bank dort, wo sie zur Sitzhaltung gehört: die Füße stehen jetzt an der Stelle aus Bild 0
-        move = np.eye(4)
-        move[:2, 3] = gym._sole_centre(fig, vertices[0] + root[0])[:2] - gym._sole_centre(fig, seated.vertices)[:2]
-        return [(prop, np.repeat((move @ m)[None], len(root), 0)) for prop, m in map(bench_prop, seated.props)]
-
+    props = [bench_prop(box) for box in seated.props]
+    props = [(prop, np.repeat(m[None], len(gym.frames_between(t)), 0)) for prop, m in props]
     return flow(fig, "Hinsetzen", keys, seated, [(0.0, t + 1, "Auf die Bank setzen und aufstehen, Füße bleiben stehen")],
-                sink=seated.spec.sink, place=place)
+                props=props, balanced=lambda progress: np.clip((1 - progress) / 0.15, 0, 1))
 
 
 def squat(fig: P.Figure, deep: Still, reps: int = 2):
@@ -623,5 +728,4 @@ def squat(fig: P.Figure, deep: Still, reps: int = 2):
     stand = blend(P.stand(), deep.pose, 0.0)
     mid = _lean(blend(stand, deep.pose, 0.5), 12)
     keys, t = _reps(stand, mid, deep.pose, reps, down=1.8, hold=1.5, up=1.6, at=0.5)
-    return flow(fig, "Hocke", keys, deep, [(0.0, t + 1, "Tiefe Hocke: runter und hoch, Fersen bleiben am Boden")],
-                sink=deep.spec.sink)
+    return flow(fig, "Hocke", keys, deep, [(0.0, t + 1, "Tiefe Hocke: runter und hoch, Fersen bleiben am Boden")])
