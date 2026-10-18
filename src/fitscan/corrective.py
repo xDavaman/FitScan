@@ -32,6 +32,16 @@ class Joint:
     def angle(self, model, poses: np.ndarray, reference: np.ndarray) -> np.ndarray:
         """Beugewinkel je Bild aus den Knochenlagen (F, J, 4, 4)."""
         s = self.side
+        if self.name == "schulter":
+            chest, a, b = (model.bone(n) for n in ("spine01", f"upperarm01.{s}", f"lowerarm01.{s}"))
+            # Oberarm gegen die Richtung nach unten im Brustkorb: wie weit er aus der Bezugshaltung
+            # (A-Pose) zum Körper hin geschwenkt ist; nach vorn oder oben gehoben zählt nicht
+            ref = reference[b, :3, 3] - reference[a, :3, 3]
+            ref_angle = np.degrees(np.arccos(-ref[2] / np.linalg.norm(ref)))
+            down = np.einsum("fij,jk,k->fi", poses[:, chest, :3, :3], reference[chest, :3, :3].T, [0, 0, -1.0])
+            arm = poses[:, b, :3, 3] - poses[:, a, :3, 3]
+            cos = np.einsum("fi,fi->f", down, arm) / np.linalg.norm(arm, axis=1)
+            return ref_angle - np.degrees(np.arccos(np.clip(cos, -1, 1)))
         if self.name == "huefte":
             pelvis, a, b = (model.bone(n) for n in ("root", f"upperleg01.{s}", f"lowerleg01.{s}"))
             rest = reference[b, :3, 3] - reference[a, :3, 3]
@@ -60,6 +70,8 @@ class Joint:
             return P.pose(P.stand(), legs=dict(hip=angle, knee=min(angle, 100), out=4, turn=-8))
         if self.name == "knie":  # Oberschenkel waagerecht, Wade legt sich an
             return P.pose(P.stand(), **{f"leg_{self.side}": dict(hip=90, knee=angle, out=4, turn=-8)})
+        if self.name == "schulter":  # Arm hängt seitlich am Körper, Hand am Oberschenkel
+            return P.pose(P.stand(), **{f"arm_{self.side}": dict(down=angle, fwd=3, elbow=12)})
         return P.pose(P.stand(), **{f"arm_{self.side}": dict(down=24, fwd=10, elbow=angle)})
 
 
@@ -73,6 +85,11 @@ def joints() -> list[Joint]:
                          (60.0, 80.0, 100.0, 120.0, 135.0, 150.0)))
         out.append(Joint("knie", s, [(f"Oberschenkel {seite}", f"Unterschenkel {seite}")],
                          (90.0, 110.0, 125.0, 140.0, 150.0, 160.0)))
+        out.append(Joint("schulter", s, [(f"Oberarm {seite}", "Brust"), (f"Oberarm {seite}", "Bauch"),
+                                         (f"Unterarm {seite}", "Bauch"), (f"Unterarm {seite}", f"Becken {seite}"),
+                                         (f"Unterarm {seite}", f"Oberschenkel {seite}"),
+                                         (f"Hand {seite}", f"Oberschenkel {seite}"), (f"Hand {seite}", f"Becken {seite}")],
+                         (15.0, 25.0, 30.0, 35.0, 40.0, 45.0)))
     return out
 
 

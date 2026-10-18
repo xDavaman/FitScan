@@ -68,3 +68,18 @@ def test_bench_sits_under_glutes(model, fig):
     assert bench.depth(still.vertices).max() < 0.003
     feet = model.dominant_bone_mask(lambda n: n.startswith(("foot", "toe")))
     assert still.vertices[feet, 2].min() == pytest.approx(0.0, abs=0.005)
+
+
+def test_plant_legs_keeps_feet_in_place(model, fig):
+    deep = P.pose(None, body=dict(pitch=30), legs=dict(hip=110, knee=120, foot=-30, out=15, turn=-15))
+    poses = [H.blend(P.stand(), deep, t) for t in (1.0, 0.5, 0.0)]
+    target = fig.pose([fig.poser.rotations(poses[0])])["poses"][0]
+    feet = target[[fig.poser.index[f"foot.{s}"] for s in P.SIDES]]
+    root = np.zeros((3, 3))
+    legs, root, worst = H.plant_legs(fig, poses, root, feet)
+    assert worst < 0.002
+    got = fig.pose([fig.poser.rotations(p) for p in legs])["poses"]
+    heel = got[:, fig.poser.index["foot.L"], :3, 3] + root
+    assert np.abs(heel - feet[0, :3, 3]).max() < 0.002
+    # die Hüfte steigt beim Aufstehen, der Oberkörper bleibt wie gewünscht geneigt
+    assert root[2, 2] > root[1, 2] > root[0, 2]
