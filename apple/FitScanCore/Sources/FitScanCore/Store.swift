@@ -7,6 +7,17 @@ public struct ScanRecord: Codable, Identifiable, Hashable {
     public var date: Date
     public var person: Person
     public var measures: [MeasureKey: Double]
+    /// Woher das Modell stammt: `massband` (aus den Maßen), `bearbeitet` (von Hand nachbearbeitet).
+    /// Fehlt in Scans aus dem ersten Build.
+    public var source: String?
+
+    /// Kurz für die Liste, z. B. „aus Maßen“
+    public var sourceLabel: String {
+        switch source {
+        case "bearbeitet": return "nachbearbeitet"
+        default: return "aus Maßen"
+        }
+    }
 
     public var title: String {
         let f = DateFormatter()
@@ -48,13 +59,21 @@ public final class PersonStore {
 
     /// Speichert einen Scan mit beiden Namensschemata als GLB. Gibt den Eintrag zurück.
     @discardableResult
-    public func save(person: Person, result: FitResult, model: BodyModel, date: Date = Date()) throws -> ScanRecord {
+    public func save(person: Person, result: FitResult, model: BodyModel, date: Date = Date(),
+                     source: String = "massband") throws -> ScanRecord {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         let personID = Self.slug(person.name)
-        let record = ScanRecord(id: f.string(from: date), personID: personID, date: date, person: person,
-                                measures: result.measures)
+        // Zwei Scans in derselben Sekunde (z. B. schnell nachbearbeitet) bekommen eigene Ordner
+        var id = f.string(from: date)
+        var n = 2
+        while FileManager.default.fileExists(atPath: scansFolder(personID).appendingPathComponent(id).path) {
+            id = f.string(from: date) + "-\(n)"
+            n += 1
+        }
+        let record = ScanRecord(id: id, personID: personID, date: date, person: person,
+                                measures: result.measures, source: source)
         let folder = scansFolder(personID).appendingPathComponent(record.id, isDirectory: true)
         try result.params.save(to: folder)
         let encoder = JSONEncoder()
