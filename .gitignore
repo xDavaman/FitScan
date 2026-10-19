@@ -15,3 +15,9 @@ models/
 *.fbx
 *.obj
 !tests/data/**
+# Xcode und Swift Package Manager
+xcuserdata/
+DerivedData/
+.build/
+.swiftpm/
+*.xcarchive
