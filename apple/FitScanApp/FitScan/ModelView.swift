@@ -10,7 +10,7 @@ struct ModelView: View {
     @State private var loaded = false
     @State private var showTapes = true
     @State private var selected: MeasureKey?
-    @State private var fitViews: [FitView] = []
+    @State private var fitViews: [FitPicture] = []
 
     var body: some View {
         List {
@@ -60,14 +60,14 @@ struct ModelView: View {
                         HStack(spacing: 10) {
                             ForEach(fitViews) { view in
                                 VStack(spacing: 4) {
-                                    if let file = view.file, let image = UIImage(contentsOfFile: file.path) {
+                                    if let image = view.image {
                                         Image(uiImage: image)
                                             .resizable()
                                             .scaledToFit()
                                             .frame(height: 180)
                                             .clipShape(RoundedRectangle(cornerRadius: 8))
                                     }
-                                    Text(String(format: "%.0f %% Deckung", locale: .deutsch, view.iou * 100))
+                                    Text(String(format: "%.0f %% Deckung", locale: .deutsch, view.iou))
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)
                                 }
@@ -111,7 +111,13 @@ struct ModelView: View {
         .navigationTitle(record.person.name.isEmpty ? "Modell" : record.person.name)
         .navigationBarTitleDisplayMode(.inline)
         .task {
-            fitViews = app.fitViews(of: record)
+            if fitViews.isEmpty {
+                let views = app.fitViews(of: record)
+                fitViews = await Task.detached(priority: .userInitiated) {
+                    views.map { FitPicture(id: $0.id, iou: $0.iou * 100,
+                                           image: $0.file.flatMap { UIImage(contentsOfFile: $0.path) }) }
+                }.value
+            }
             guard !loaded, let model = app.model, let params = app.params(of: record) else { return }
             let (mesh, tapes) = await Task.detached(priority: .userInitiated) {
                 (BodyMesh(model: model, params: params), TapeMeshes(model: model, params: params))
@@ -144,4 +150,12 @@ struct ModelView: View {
             }
         }
     }
+}
+
+/// Kontrollbild der Passform, einmal geladen.
+struct FitPicture: Identifiable {
+    let id: Int
+    /// Überdeckung in Prozent
+    let iou: Double
+    let image: UIImage?
 }

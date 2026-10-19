@@ -273,7 +273,9 @@ public extension BodyModel {
                 maxY = max(maxY, y)
             }
         }
-        guard count >= 50 else { throw FitScanError.input(["Auf einem Bild ist keine Person zu erkennen."]) }
+        guard count >= 50, maxY - minY >= 20 else {
+            throw FitScanError.input(["Auf einem Bild ist keine Person zu erkennen."])
+        }
 
         var bones: [Int] = [], xy: [SIMD2<Double>] = [], weights: [Double] = [], offsets: [Vec3] = []
         for index in frame.keypoints.keys.sorted() {
@@ -472,7 +474,6 @@ struct PointGrid {
     init(xs: [Double], ys: [Double], count: Int, cell: Double = 8) {
         self.xs = xs
         self.ys = ys
-        self.cell = cell
         var lx = Double.infinity, hx = -Double.infinity, ly = Double.infinity, hy = -Double.infinity
         for i in 0..<count {
             lx = min(lx, xs[i])
@@ -480,6 +481,9 @@ struct PointGrid {
             ly = min(ly, ys[i])
             hy = max(hy, ys[i])
         }
+        // höchstens etwa 512 × 512 Zellen, auch wenn Punkte weit aus dem Bild fallen
+        let cell = max(cell, max(hx - lx, hy - ly) / 512)
+        self.cell = cell
         minX = lx
         minY = ly
         let gx = max(1, Int(((hx - lx) / cell).rounded(.down)) + 1)
@@ -566,6 +570,10 @@ public func viewTerms(_ verts: [Vec3], _ kp: [Vec3], yaw: Double, trans: Vec3, v
         let z = max(q.z, 1e-3)
         u[i] = f * q.x / z + view.cx
         v[i] = f * q.y / z + view.cy
+        if !u[i].isFinite || !v[i].isFinite {
+            return ViewTerms(loss: .infinity, points: [Vec3](repeating: .zero, count: nv),
+                             keypoints: [Vec3](repeating: .zero, count: nk), yaw: 0, trans: .zero)
+        }
     }
     let h = view.pxHeight
     var gu = [Double](repeating: 0, count: n)
@@ -746,8 +754,9 @@ public extension BodyModel {
         let rig = try PoseRig(data: data, bones: settings.poseBones)
         let k = views.count, np = rig.poseBones.count
         let lr = settings.learningRate
-        let s0 = settings.steps.first ?? 80, s1 = settings.steps.count > 1 ? settings.steps[1] : 160
+        let s0 = max(1, settings.steps.first ?? 80), s1 = max(1, settings.steps.count > 1 ? settings.steps[1] : 160)
         let trial = max(1, s1 / 3)
+        let probeEvery = max(1, settings.probeEvery)
         let starts = uniqueMuscleStarts(sigmoid(x[space.free.firstIndex(of: "muscle") ?? 0]), settings.muscleStarts)
         let totalSteps = Double(k * 4 + s0 + trial * starts.count + (s1 - trial))
         var done = 0.0
@@ -802,7 +811,7 @@ public extension BodyModel {
             for j in 0..<np { pose[j] = Vec3(a[4 * k + 3 * j], a[4 * k + 3 * j + 1], a[4 * k + 3 * j + 2]) }
         }
 
-        func runStage(_ name: String, steps: Int, shape: Bool, keypointWeight: Double) -> Double {
+        func runStage(_ name: String, steps: Int, shape: Bool, keypointWeight: Double) throws -> Double {
             var viewAdam = Adam(count: 4 * k + 3 * np, lr: lr)
             var shapeAdam = Adam(count: x.count, lr: lr)
             var probe: MeasureProbe?
@@ -810,7 +819,7 @@ public extension BodyModel {
             let silhouette = settings.silhouetteWeight / Double(k)
             for step in 0..<steps {
                 let st = body(x, pose)
-                if step % settings.probeEvery == 0 || probe == nil { probe = MeasureProbe(model: self, rest: st.rest) }
+                if step % probeEvery == 0 || probe == nil { probe = MeasureProbe(model: self, rest: st.rest) }
                 var loss = 0.0
                 var gPosed = [Vec3](repeating: .zero, count: numVertices)
                 var gView = [Double](repeating: 0, count: 4 * k + 3 * np)
@@ -865,6 +874,9 @@ public extension BodyModel {
                     }
                     shapeAdam.step(&x, gx)
                 }
+                guard loss.isFinite else {
+                    throw FitScanError.input(["Die Anpassung an die Bilder ist fehlgeschlagen. Bitte andere Bilder wählen."])
+                }
                 var a = packView()
                 viewAdam.step(&a, gView)
                 unpackView(a)
@@ -875,7 +887,7 @@ public extension BodyModel {
             return last
         }
 
-        _ = runStage("Lage und Haltung", steps: s0, shape: false, keypointWeight: 1)
+        _ = try runStage("Lage und Haltung", steps: s0, shape: false, keypointWeight: 1)
 
         // Muskeln und Fett sehen bei gleichem Gewicht ähnlich aus: mehrere Startwerte kurz anrechnen
         let muscle = space.free.firstIndex(of: "muscle") ?? 0
@@ -884,11 +896,11 @@ public extension BodyModel {
         for m0 in starts {
             (x, yaws, trans, pose) = snapshot
             x[muscle] = logit(m0)
-            let score = runStage("Körperform", steps: trial, shape: true, keypointWeight: settings.keypointWeightShape)
+            let score = try runStage("Körperform", steps: trial, shape: true, keypointWeight: settings.keypointWeightShape)
             if best == nil || score < best!.score { best = (score, x, yaws, trans, pose) }
         }
         if let best { (x, yaws, trans, pose) = (best.x, best.yaws, best.trans, best.pose) }
-        _ = runStage("Körperform", steps: s1 - trial, shape: true, keypointWeight: settings.keypointWeightShape)
+        _ = try runStage("Körperform", steps: max(0, s1 - trial), shape: true, keypointWeight: settings.keypointWeightShape)
 
         var params = space.params(x)
         if let h = targets[.height] { params = exactHeight(params, heightCM: h) }

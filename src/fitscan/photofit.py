@@ -426,7 +426,7 @@ def fit_photos(
         heads = rest["bone_heads"][0].to(DTYPE).detach()
         rs, ts = rig.transforms(heads, pose_aa)
         posed = rig.skin(verts, rs, ts)
-        height = float(verts[:, 2].max() - verts[:, 2].min())
+        height = float((verts[:, 2].max() - verts[:, 2].min()).detach())
         return rest, posed, heads, rs, ts, height
 
     def keypoints(view: PreparedView, heads, rs, ts, height) -> torch.Tensor:
@@ -502,12 +502,13 @@ def fit_photos(
         _, posed, *_ = body()
         verts = posed.numpy()
     for i, view in enumerate(views):
-        rendered = render_mask(verts, model.faces, float(yaws[i]), trans[i].numpy(), view.intr) > 0
+        rendered = render_mask(verts, model.faces, float(yaws[i].detach()), trans[i].detach().numpy(),
+                               view.intr) > 0
         inter = (rendered & view.mask).sum()
         union = (rendered | view.mask).sum()
         overlay = np.full((*rendered.shape, 3), 245, np.uint8)
         overlay[rendered & view.mask] = (110, 180, 110)
         overlay[view.mask & ~rendered] = (220, 60, 60)
         overlay[rendered & ~view.mask] = (60, 100, 230)
-        results.append(FrameFitResult(math.degrees(float(yaws[i])) % 360, float(inter / max(union, 1)), overlay))
+        results.append(FrameFitResult(math.degrees(float(yaws[i].detach())) % 360, float(inter / max(union, 1)), overlay))
     return params, measure_params(model, params), results

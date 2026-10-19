@@ -185,10 +185,13 @@ final class PhotoFitTests: XCTestCase {
             guard let key = MeasureKey(rawValue: k), let mine = result.measures[key] else { continue }
             XCTAssertEqual(mine, pc, accuracy: 1.0, "\(key.label): App \(mine), PC \(pc)")
         }
+        // Gegen den wahren Körper höchstens 1 cm weiter weg als der PC (der Scan aus vier Bildern
+        // ohne Maßband trifft die Wade am PC selbst nur auf gut 4 cm)
         let truth = reference["truth"] as! [String: Double]
         for key in MeasureKey.circumferences {
-            guard let mine = result.measures[key], let t = truth[key.rawValue] else { continue }
-            XCTAssertEqual(mine, t, accuracy: 3.5, "\(key.label) gegen den wahren Körper")
+            guard let mine = result.measures[key], let t = truth[key.rawValue], let pc = pcMeasures[key.rawValue]
+            else { continue }
+            XCTAssertLessThanOrEqual(abs(mine - t), abs(pc - t) + 1.0, "\(key.label) gegen den wahren Körper")
         }
         let pcYaws = ref["yaw_deg"] as! [Double]
         for (i, view) in result.views.enumerated() {

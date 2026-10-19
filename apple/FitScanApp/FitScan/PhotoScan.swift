@@ -61,8 +61,18 @@ enum PersonDetector {
             return reject("Bild ließ sich nicht auswerten")
         }
         guard let buffer = segmentation.results?.first?.pixelBuffer else { return reject("Keine Person erkannt") }
-        let (mask, w, h) = maskValues(buffer)
+        var (mask, w, h) = maskValues(buffer)
         guard w > 0, h > 0 else { return reject("Keine Person erkannt") }
+        // Vision liefert die Maske in fester Größe; auf das Seitenverhältnis des Bildes bringen
+        let aspect = Double(image.width) / Double(image.height)
+        if abs(Double(w) / Double(h) / aspect - 1) > 0.01 {
+            let side = max(w, h)
+            let tw = aspect >= 1 ? side : max(1, Int((Double(side) * aspect).rounded()))
+            let th = aspect >= 1 ? max(1, Int((Double(side) / aspect).rounded())) : side
+            mask = MaskTools.resize(mask, width: w, height: h, toWidth: tw, height: th).map { $0 ? 1 : 0 }
+            w = tw
+            h = th
+        }
 
         // Person groß genug und ganz im Bild?
         var person = 0, top = 0, bottom = 0
@@ -209,9 +219,12 @@ final class PhotoScanner: ObservableObject {
         for (i, item) in items.enumerated() {
             let isMovie = item.supportedContentTypes.contains { $0.conforms(to: .movie) }
             do {
-                if isMovie, let movie = try await item.loadTransferable(type: PickedMovie.self) {
+                if isMovie {
+                    guard let movie = try await item.loadTransferable(type: PickedMovie.self) else {
+                        throw CocoaError(.fileReadUnknown)
+                    }
+                    defer { try? FileManager.default.removeItem(at: movie.url) }
                     let frames = try await MediaLoader.videoFrames(movie.url, count: Self.videoSamples)
-                    try? FileManager.default.removeItem(at: movie.url)
                     for (j, image) in frames.enumerated() {
                         let focal = PhotoFrame.defaultFocal(width: image.width, height: image.height,
                                                             fovLongSideDeg: fovLongSideDeg)
@@ -222,13 +235,13 @@ final class PhotoScanner: ObservableObject {
                         result.append(checked)
                         analyzing = (Double(i) + Double(j + 1) / Double(frames.count)) / Double(items.count)
                     }
-                } else if let data = try await item.loadTransferable(type: Data.self),
-                          let picked = MediaLoader.photo(data, fovLongSideDeg: fovLongSideDeg) {
-                    let checked = await Task.detached(priority: .userInitiated) {
-                        PersonDetector.analyze(picked.image, focal: picked.focal, fromVideo: false)
+                } else if let data = try await item.loadTransferable(type: Data.self) {
+                    let checked = await Task.detached(priority: .userInitiated) { () -> ScanImage? in
+                        guard let picked = MediaLoader.photo(data, fovLongSideDeg: fovLongSideDeg) else { return nil }
+                        return PersonDetector.analyze(picked.image, focal: picked.focal, fromVideo: false)
                     }.value
                     guard current == run else { return }
-                    result.append(checked)
+                    if let checked { result.append(checked) }
                 }
             } catch {
                 guard current == run else { return }
