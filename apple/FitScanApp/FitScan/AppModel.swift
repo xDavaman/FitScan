@@ -6,6 +6,22 @@ extension Locale {
     static let deutsch = Locale(identifier: "de_DE")
 }
 
+/// Seiten, zu denen die App von überall springen kann.
+enum Route: Hashable {
+    case model(ScanRecord)
+    case edit(ScanRecord)
+    case history
+    case guide
+}
+
+/// Blätter, die über allem aufgehen. Ein Wechsel schließt das alte und öffnet das neue.
+enum AppSheet: String, Identifiable {
+    case newScan
+    case measures
+
+    var id: String { rawValue }
+}
+
 /// Zustand der App: Annys Daten, gespeicherte Scans und die laufende Berechnung.
 @MainActor
 final class AppModel: ObservableObject {
@@ -21,6 +37,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var progress: Double?
     @Published var problems: [String] = []
     @Published var lastRecord: ScanRecord?
+    @Published var path: [Route] = []
+    @Published var sheet: AppSheet?
 
     private(set) var model: BodyModel?
     private var store: PersonStore?
@@ -40,6 +58,33 @@ final class AppModel: ObservableObject {
 
     func reloadScans() {
         scans = store?.allScans() ?? []
+    }
+
+    /// Neuestes Modell, das auf dem Startbildschirm steht.
+    var latest: ScanRecord? { scans.first }
+
+    /// Vorname aus dem neuesten Scan, für die Begrüßung.
+    var firstName: String? {
+        guard let name = latest?.person.name.trimmingCharacters(in: .whitespaces), !name.isEmpty else { return nil }
+        return name.split(separator: " ").first.map(String.init)
+    }
+
+    /// Eingaben der letzten Person (oder von `record`) ins Formular übernehmen.
+    func prefillPerson(from record: ScanRecord? = nil) {
+        if let record = record ?? latest { person = record.person }
+        problems = []
+    }
+
+    /// Maße ändern: Formular mit den Eingaben von `record` öffnen.
+    func openMeasureForm(from record: ScanRecord) {
+        prefillPerson(from: record)
+        sheet = .measures
+    }
+
+    /// Nach dem Berechnen: Blatt schließen und das neue Modell zeigen.
+    func finishedMeasureForm(_ record: ScanRecord) {
+        sheet = nil
+        path = [.model(record)]
     }
 
     /// Passt das Modell an die Eingaben an und speichert es. Rechnet im Hintergrund.
@@ -78,6 +123,17 @@ final class AppModel: ObservableObject {
 
     func file(_ name: String, of record: ScanRecord) -> URL? {
         store?.folder(of: record).appendingPathComponent(name)
+    }
+
+    /// Speichert ein von Hand nachbearbeitetes Modell als neuen Eintrag im Verlauf (der alte bleibt).
+    func saveEdited(_ record: ScanRecord, params: BodyParams) async throws -> ScanRecord {
+        guard let model, let store else { throw FitScanError.data("Die App ist noch nicht bereit.") }
+        let saved = try await Task.detached(priority: .userInitiated) {
+            let result = FitResult(params: params, measures: model.measure(params))
+            return try store.save(person: record.person, result: result, model: model, source: "bearbeitet")
+        }.value
+        reloadScans()
+        return saved
     }
 
     func delete(_ record: ScanRecord) {

@@ -5,7 +5,9 @@ import FitScanCore
 struct MeasureFormView: View {
     @EnvironmentObject var app: AppModel
     @Environment(\.dismiss) private var dismiss
-    var onDone: (ScanRecord) -> Void
+    /// Im Blatt „Neuer Scan“ führt der Zurück-Pfeil heraus, dort ohne eigenes Abbrechen
+    var showsCancel = true
+    var onDone: @MainActor (ScanRecord) -> Void
 
     private static let optional: [MeasureKey] = [.chest, .waist, .hips, .thigh, .upperarm, .calf, .neck, .inseam]
 
@@ -61,10 +63,13 @@ struct MeasureFormView: View {
         .navigationTitle("Deine Maße")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Abbrechen") { dismiss() }.disabled(app.progress != nil)
+            if showsCancel {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Abbrechen") { dismiss() }.disabled(app.progress != nil)
+                }
             }
         }
+        .navigationBarBackButtonHidden(app.progress != nil)
         .interactiveDismissDisabled(app.progress != nil)
     }
 
