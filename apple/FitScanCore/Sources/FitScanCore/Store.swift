@@ -106,7 +106,10 @@ public final class PersonStore {
                 }
             }
         }
-        return out.sorted { $0.date > $1.date }
+        // Gleiche Sekunde (Ordner „…-2“): der spätere Ordner zuerst
+        return out.sorted {
+            $0.date != $1.date ? $0.date > $1.date : $0.id.compare($1.id, options: .numeric) == .orderedDescending
+        }
     }
 
     public func delete(_ record: ScanRecord) throws {

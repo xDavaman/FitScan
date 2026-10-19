@@ -137,6 +137,7 @@ struct HomeView: View {
         guard shownID != (record?.id ?? "beispiel") else { return }
         let params = record.flatMap { app.params(of: $0) } ?? BodyParams()
         let mesh = await Task.detached(priority: .userInitiated) { BodyMesh(model: model, params: params) }.value
+        guard !Task.isCancelled else { return }  // inzwischen kam ein neueres Modell
         scene.show(mesh)
         shownID = record?.id ?? "beispiel"
     }

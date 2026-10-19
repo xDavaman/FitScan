@@ -123,8 +123,11 @@ final class BodyScene: ObservableObject {
         )
         geometry.materials = [skin]
         body.geometry = geometry
+        // Neu einrahmen beim ersten Netz oder wenn eine andere Person gezeigt wird; beim Bearbeiten
+        // bleibt die Größe gleich und die Kamera da, wo der Nutzer sie hingedreht hat.
+        let reframe = !framed || abs(mesh.height - height) > 0.01
         height = mesh.height
-        if !framed {
+        if reframe {
             framed = true
             frameCamera()
         }
@@ -199,6 +202,9 @@ struct BodySceneView: UIViewRepresentable {
         view.rendersContinuously = false
         view.isPlaying = true
         view.allowsCameraControl = allowsControl
+        // Sonst rendert SceneKit nach der ersten Geste durch eine eigene Kamerakopie, und
+        // Zurücksetzen oder Neu-Einrahmen wirken nicht mehr
+        view.cameraControlConfiguration.autoSwitchToFreeCamera = false
         view.defaultCameraController.interactionMode = .orbitTurntable
         view.defaultCameraController.target = scene.target
         view.defaultCameraController.maximumVerticalAngle = 60

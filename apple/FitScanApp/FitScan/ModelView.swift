@@ -24,6 +24,7 @@ struct ModelView: View {
                             .padding(8)
                             .background(.thinMaterial, in: Circle())
                     }
+                    .buttonStyle(.borderless)  // sonst löst jeder Tipp in die Zeile den Knopf aus
                     .padding(10)
                     .accessibilityLabel("Ansicht zurücksetzen")
                 }
