@@ -540,6 +540,12 @@ def _surfaces(ex, i: int) -> list:
 
 LEG_DOF = (("upperleg01", "vor"), ("upperleg01", "spreizen"), ("upperleg01", "dreh"), ("lowerleg01", "beugen"),
            ("foot", "runter"), ("foot", "aussen"))
+# Beim Gehen kippt der Fuß auch seitlich (Sprunggelenk dreht um die Fußlängsachse)
+WALK_DOF = (*LEG_DOF, ("foot", "dreh"))
+
+
+KNEE_MIN = 2.0  # Grad: Knie bleiben immer etwas gebeugt
+TWIST_MAX = 35.0  # Grad: Oberschenkel drehen und Fuß kippt nicht weiter (sonst klappt das Bein um)
 
 
 def _rotvec(r: np.ndarray) -> np.ndarray:
@@ -567,26 +573,33 @@ def _with(pose: dict, keys: list, x: np.ndarray) -> dict:
     return out
 
 
-def _foot_error(bones: np.ndarray, foot: list[int], shift: np.ndarray, feet: np.ndarray) -> np.ndarray:
-    """Abstand der Füße zu ihrer Stelle: Lage in cm, Richtung in 1/10 rad."""
+def _foot_error(bones: np.ndarray, foot: list[int], shift: np.ndarray, feet: np.ndarray,
+                yaw: float = 1.0) -> np.ndarray:
+    """Abstand der Füße zu ihrer Stelle: Lage in cm, Richtung in 1/10 rad (Drehung um die Hochachse mal yaw)."""
     r = []
     for k, j in enumerate(foot):
         r += list((bones[j][:3, 3] + shift - feet[k][:3, 3]) * 100)
-        r += list(_rotvec(feet[k][:3, :3] @ bones[j][:3, :3].T) * 10)
+        r += list(_rotvec(feet[k][:3, :3] @ bones[j][:3, :3].T) * [10, 10, 10 * yaw])
     return np.array(r)
 
 
 def plant_legs(fig: P.Figure, poses: list[dict], root: np.ndarray, feet: np.ndarray,
-               iterations: int = 12) -> tuple[list[dict], np.ndarray, float]:
+               iterations: int = 12, height: float = 0.03, yaw: float = 1.0,
+               dofs: tuple = LEG_DOF) -> tuple[list[dict], np.ndarray, float]:
     """Beine je Bild so beugen, dass beide Füße genau an ihrer Stelle stehen (Lage und Richtung wie in
-    feet: (2, 4, 4) Weltlage von foot.L/foot.R). Frei sind je Bein Hüfte (3), Knie und Sprunggelenk (2)
-    sowie die Höhe der Hüfte; die Haltung weicht so wenig wie möglich von der gewünschten ab.
+    feet: (2, 4, 4) Weltlage von foot.L/foot.R, oder (F, 2, 4, 4) je Bild beim Gehen). Frei sind je Bein
+    Hüfte (3), Knie und Sprunggelenk (2)
+    sowie die Höhe der Hüfte (height: Gewicht je cm Abweichung von der Wunschhöhe; yaw < 1 lässt die Füße
+    sich etwas um die Hochachse drehen, statt den Oberschenkel stark zu verdrehen); die Knie knicken nie
+    nach hinten durch, und die Haltung weicht so wenig wie möglich von der gewünschten ab.
     Rückgabe: Haltungen, Wurzelverschiebung (F, 3), größte Abweichung der Füße (m)."""
-    keys = [(f"{b}.{s}", d) for s in P.SIDES for b, d in LEG_DOF]
+    keys = [(f"{b}.{s}", d) for s in P.SIDES for b, d in dofs]
     foot = [fig.poser.index[f"foot.{s}"] for s in P.SIDES]
     n = len(keys) + 1
     scale = np.array([1.0] * len(keys) + [0.01])  # Schritt: Grad bzw. cm
-    weight = np.array([0.01] * len(keys) + [0.03]) / scale  # Abweichung von der Wunschhaltung
+    weight = np.array([0.01] * len(keys) + [height]) / scale  # Abweichung von der Wunschhaltung (height: je cm)
+    knees = [k for k, (_, d) in enumerate(keys) if d == "beugen"]
+    twists = [k for k, (b, d) in enumerate(keys) if d in ("dreh", "aussen")]
     out, roots, worst = [], root.astype(float).copy(), 0.0
     previous = None
     for i, want in enumerate(poses):
@@ -595,9 +608,13 @@ def plant_legs(fig: P.Figure, poses: list[dict], root: np.ndarray, feet: np.ndar
         if previous is not None:  # vom letzten Bild aus weiter (Hüfthöhe als Abstand zur Wunschhöhe)
             x[:-1], x[-1] = previous[:-1], goal[-1] + previous[-1]
 
-        def residual(x, bones, i=i, goal=goal):
+        target = feet[i] if feet.ndim == 4 else feet
+
+        def residual(x, bones, i=i, goal=goal, target=target):
             shift = np.array([root[i, 0], root[i, 1], x[-1]])
-            return np.concatenate([_foot_error(bones, foot, shift, feet), (x - goal) * weight])
+            limits = np.concatenate([np.maximum(KNEE_MIN - x[knees], 0),  # Knie knicken nie nach hinten
+                                     np.maximum(np.abs(x[twists]) - TWIST_MAX, 0)]) * 5
+            return np.concatenate([_foot_error(bones, foot, shift, target, yaw), (x - goal) * weight, limits])
 
         damping = 1e-2
         for _ in range(iterations):
@@ -616,7 +633,7 @@ def plant_legs(fig: P.Figure, poses: list[dict], root: np.ndarray, feet: np.ndar
             if np.abs(step / scale).max() < 0.05:
                 break
         r = residual(x, _bones(fig, [_with(want, keys, x)])[0])
-        worst = max(worst, float(np.abs(r[[0, 1, 2, 6, 7, 8]]).max()) / 100)
+        worst = max(worst, float(np.abs(r[[0, 1, 2, 6, 7, 8]]).max()) / 100)  # nur die Lage der Füße
         out.append(_with(want, keys, x))
         roots[i, 2] = x[-1]
         previous = np.concatenate([x[:-1], [x[-1] - goal[-1]]])
