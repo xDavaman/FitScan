@@ -269,6 +269,7 @@ class GlbAnimation:
     times: np.ndarray  # (F,) Sekunden
     rotations: np.ndarray  # (F, J, 4) Quaternion x, y, z, w, Reihenfolge wie RiggedMesh.joint_names
     root_translation: np.ndarray  # (F, 3) lokale Lage von Gelenk 1 (Annys „root“)
+    weights: dict[str, np.ndarray] = dataclasses.field(default_factory=dict)  # Formregler -> (F,) 0..1
 
 
 def write_glb(rig: RiggedMesh, path: Path, name: str = "FitScan",
@@ -350,7 +351,7 @@ def write_glb(rig: RiggedMesh, path: Path, name: str = "FitScan",
         mesh["extras"] = {"targetNames": target_names}
 
     if animations:
-        extra["animations"] = [_animation(a, nodes, first_joint, buf) for a in animations]
+        extra["animations"] = [_animation(a, nodes, first_joint, buf, target_names) for a in animations]
 
     gltf = {
         "asset": {"version": "2.0", "generator": "FitScan"},
@@ -382,7 +383,8 @@ def write_glb(rig: RiggedMesh, path: Path, name: str = "FitScan",
     return path
 
 
-def _animation(anim: GlbAnimation, nodes: list[dict], first_joint: int, buf: _Buffer) -> dict:
+def _animation(anim: GlbAnimation, nodes: list[dict], first_joint: int, buf: _Buffer,
+               target_names: list[str]) -> dict:
     times = buf.add(anim.times.astype(np.float32), FLOAT, "SCALAR", minmax=True)
     samplers, channels = [], []
 
@@ -399,6 +401,16 @@ def _animation(anim: GlbAnimation, nodes: list[dict], first_joint: int, buf: _Bu
             continue
         channel(first_joint + j, "rotation", q, "VEC4")
     channel(first_joint + 1, "translation", anim.root_translation, "VEC3")
+    if anim.weights:
+        # glTF steuert immer alle Formregler des Netzes zusammen; nicht genannte bleiben bei 0
+        unknown = set(anim.weights) - set(target_names)
+        if unknown:
+            raise ValueError(f"Formregler fehlen im Netz: {sorted(unknown)}")
+        values = np.zeros((len(anim.times), len(target_names)), np.float32)
+        for k, target in enumerate(target_names):
+            if target in anim.weights:
+                values[:, k] = anim.weights[target]
+        channel(1, "weights", values.reshape(-1), "SCALAR")
     return {"name": anim.name, "samplers": samplers, "channels": channels}
 
 

@@ -10,7 +10,8 @@ Koordinaten: Anny-Achsen (Z oben, Blick -Y, linke Körperseite +X), Boden bei z 
 
 Finger gehören einfach mit in `bones` (z. B. „finger2-1.R“). Gegenstände, die die Figur greift
 oder trägt, hängen als `Attachment` an einem Knochen; Kontakte (Füße, Hände, Gesäß ...) stehen je
-Knochen in `contacts`.
+Knochen in `contacts`. Mimik steht als Kurve je ARKit-Gesichtsregler (`face_rig`, z. B. „jawOpen“)
+in `face`, Werte 0 bis 1 je Bild.
 """
 
 from __future__ import annotations
@@ -61,6 +62,7 @@ class Motion:
     loop: bool = False
     contacts: dict[str, np.ndarray] = dataclasses.field(default_factory=dict)  # Knochen -> (F,) bool
     attachments: list[Attachment] = dataclasses.field(default_factory=list)
+    face: dict[str, np.ndarray] = dataclasses.field(default_factory=dict)  # ARKit-Regler -> (F,) 0..1
 
     @property
     def frames(self) -> int:
@@ -77,6 +79,7 @@ class Motion:
                 "source": self.source, "loop": self.loop,
                 "attachments": [a.to_json() for a in self.attachments]}
         extra = {f"contact:{k}": v.astype(bool) for k, v in self.contacts.items()}
+        extra |= {f"face:{k}": v.astype(np.float32) for k, v in self.face.items()}
         with path.open("wb") as f:
             np.savez_compressed(f, meta=np.frombuffer(json.dumps(meta).encode("utf-8"), np.uint8),
                                 rotations=self.rotations.astype(np.float32),
@@ -90,9 +93,10 @@ class Motion:
             if meta.get("format", 0) > FORMAT:
                 raise ValueError(f"{path}: neueres Bewegungsformat, bitte FitScan aktualisieren.")
             contacts = {k.split(":", 1)[1]: data[k].copy() for k in data.files if k.startswith("contact:")}
+            face = {k.split(":", 1)[1]: data[k].copy() for k in data.files if k.startswith("face:")}
             return cls(meta["name"], float(meta["fps"]), list(meta["bones"]), data["rotations"].copy(),
                        data["root"].copy(), meta.get("source", ""), bool(meta.get("loop", False)), contacts,
-                       [Attachment.from_json(a) for a in meta.get("attachments", [])])
+                       [Attachment.from_json(a) for a in meta.get("attachments", [])], face)
 
     def resampled(self, fps: float) -> Motion:
         """Andere Bildrate (Drehungen sphärisch, Hüfte linear interpoliert)."""
@@ -108,11 +112,13 @@ class Motion:
         root = self.root[i0] * (1 - w[:, None]) + self.root[i0 + 1] * w[:, None]
         near = np.round(t).astype(int)
         contacts = {k: v[near] for k, v in self.contacts.items()}
+        face = {k: (v[i0] * (1 - w) + v[i0 + 1] * w).astype(np.float32) for k, v in self.face.items()}
         factor = (n - 1) / max(self.frames - 1, 1)
         attachments = [dataclasses.replace(a, start=int(round(a.start * factor)), end=int(round(a.end * factor)))
                        for a in self.attachments]
         return dataclasses.replace(self, fps=fps, rotations=q.numpy().astype(np.float32),
-                                   root=root.astype(np.float32), contacts=contacts, attachments=attachments)
+                                   root=root.astype(np.float32), contacts=contacts, attachments=attachments,
+                                   face=face)
 
 
 def from_rotvecs(name: str, fps: float, bones: list[str], rotvecs: np.ndarray, root: np.ndarray,
@@ -344,18 +350,28 @@ def gltf_channels(playback: Playback, parents: list[int]) -> tuple[np.ndarray, n
 def export_glb(model: BodyModel, params: BodyParams, motions: list[Motion], path: Path,
                preset: str = "anny", skin: np.ndarray | None = None, eyes: np.ndarray | None = None,
                name: str = "FitScan") -> Path:
-    """Modell mit Skelett, Haut und den Bewegungen als glTF-Animationen (eine je Bewegung)."""
+    """Modell mit Skelett, Haut und den Bewegungen als glTF-Animationen (eine je Bewegung). Hat eine
+    Bewegung Mimik, bekommt das Netz die 52 Gesichtsregler als Formregler, und die Animation steuert
+    sie mit (glTF „weights“)."""
     from .export import GlbAnimation, build_rig, write_glb
     from .fit import repair_offsets
 
     if params.offsets is not None:
         params, _ = repair_offsets(model, params)
     rig = build_rig(model, params, preset=preset, skin=skin, eyes=eyes)
+    if any(m.face for m in motions):
+        from .export import _TO_Y_UP
+        from .face_rig import face_morphs
+
+        rest = model.rest_numpy(params)["vertices"]
+        for label, delta in face_morphs(model, rest).items():
+            rig.morphs[label] = (delta @ _TO_Y_UP[:3, :3].T).astype(np.float32)
     animations = []
     for motion in motions:
         pb = play(model, params, motion, vertices=False)
         rotations, root = gltf_channels(pb, rig.joint_parents)
-        animations.append(GlbAnimation(motion.name, np.arange(motion.frames) / motion.fps, rotations, root))
+        animations.append(GlbAnimation(motion.name, np.arange(motion.frames) / motion.fps, rotations, root,
+                                       weights=dict(motion.face)))
     return write_glb(rig, path, name=name, animations=animations)
 
 
