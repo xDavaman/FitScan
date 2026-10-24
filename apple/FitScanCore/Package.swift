@@ -12,7 +12,7 @@ let package = Package(
     targets: [
         .target(
             name: "FitScanCore",
-            resources: [.copy("Resources/anny_v1.fsan")]
+            resources: [.copy("Resources/anny_v1.fsan"), .copy("Resources/fotoscan.json")]
         ),
         .testTarget(
             name: "FitScanCoreTests",

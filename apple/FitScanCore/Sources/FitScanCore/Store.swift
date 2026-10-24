@@ -7,7 +7,8 @@ public struct ScanRecord: Codable, Identifiable, Hashable {
     public var date: Date
     public var person: Person
     public var measures: [MeasureKey: Double]
-    /// Woher das Modell stammt: `massband` (aus den Maßen), `bearbeitet` (von Hand nachbearbeitet).
+    /// Woher das Modell stammt: `massband` (aus den Maßen), `bearbeitet` (von Hand nachbearbeitet),
+    /// `foto` oder `video` (aus Bildern der Mediathek).
     /// Fehlt in Scans aus dem ersten Build.
     public var source: String?
 
@@ -15,6 +16,8 @@ public struct ScanRecord: Codable, Identifiable, Hashable {
     public var sourceLabel: String {
         switch source {
         case "bearbeitet": return "nachbearbeitet"
+        case "foto": return "aus Fotos"
+        case "video": return "aus Video"
         default: return "aus Maßen"
         }
     }

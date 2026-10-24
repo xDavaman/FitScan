@@ -41,6 +41,8 @@ struct ScanGuideView: View {
                 text: "Arme gestreckt, etwa 30° vom Körper, Füße schulterbreit, Blick geradeaus."),
             Tip(icon: "arrow.triangle.2.circlepath", title: "Einmal langsam drehen",
                 text: "Auf der Stelle einmal ganz herum, etwa 20 Sekunden für eine Runde. Arme dabei ruhig halten."),
+            Tip(icon: "photo.stack", title: "Oder einige Fotos",
+                text: "Statt des Videos gehen auch 2 bis 8 Fotos: von vorn, von beiden Seiten und von hinten, jedes Mal mit demselben Abstand und derselben Haltung."),
         ]),
         Step(title: "Maßband (macht das Modell genauer)", tips: [
             Tip(icon: "ruler", title: "Größe und Gewicht",
@@ -53,7 +55,7 @@ struct ScanGuideView: View {
     var body: some View {
         List {
             Section {
-                Text("So wird dein Modell möglichst genau. Der Kamera-Scan in einem der nächsten Builds prüft diese Punkte live und zeigt dir eine Ampel.")
+                Text("So wird dein Modell aus Video oder Fotos möglichst genau. Der Kamera-Scan in einem der nächsten Builds prüft diese Punkte live und zeigt dir eine Ampel.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
