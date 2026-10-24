@@ -60,6 +60,11 @@ zeigt, welche installiert sind), Modell aus Maßen berechnen, 3D-Vorschau drehen
 in Xcode unter *Signing & Capabilities* das Team des Apple-Entwicklerkontos wählen. Die Bundle-ID ist
 `com.xdavaman.fitscan`.
 
+Fotoscan (Etappe 3) am besten auf dem iPhone prüfen, weil die Personenmaske von Vision nicht in jedem Simulator
+läuft: *Neuer Scan › Aus Fotos und Videos*, ein Drehvideo oder vier Fotos (vorn, beide Seiten, hinten) wählen,
+Größe und Gewicht eintragen, berechnen. Das Schema startet die App als Release-Build; im Debug-Build dauert die
+Anpassung ein Vielfaches.
+
 ## TestFlight
 
 Erst nach ausdrücklichem Ja von Sean-John zur Signierung und zum Hochladen mit seiner Apple-ID:
