@@ -178,12 +178,18 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Bilder einer Bewegung mit dieser Körperform für die Vorschau, im Hintergrund gerechnet.
-    func motionFrames(_ clip: MotionClip, params: BodyParams) async -> [BodyMesh] {
-        guard let model else { return [] }
+    /// Bilder einer Bewegung mit dieser Körperform für die Vorschau, mit weichen Übergängen aus der
+    /// Ruhepose und zurück (je 12 Bilder, 0,4 s). Im Hintergrund gerechnet.
+    func motionFrames(_ clip: MotionClip, params: BodyParams) async -> MotionFrames {
+        guard let model else { return MotionFrames() }
         let face = faceRig
         return await Task.detached(priority: .userInitiated) {
-            model.previewFrames(params, clip: clip, face: face).map { BodyMesh($0) }
+            let end = clip.loop ? 0 : clip.frames - 1  // eine Schleife endet wieder bei Bild 0
+            return MotionFrames(
+                intro: model.previewTransition(params, clip: clip, face: face, steps: 12).map { BodyMesh($0) },
+                main: model.previewFrames(params, clip: clip, face: face).map { BodyMesh($0) },
+                outro: model.previewTransition(params, clip: clip, face: face, frame: end, steps: 12, toRest: true)
+                    .map { BodyMesh($0) })
         }.value
     }
 

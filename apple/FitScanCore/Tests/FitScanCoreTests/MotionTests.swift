@@ -139,6 +139,36 @@ final class MotionTests: XCTestCase {
         XCTAssertEqual(paths, ["rotation", "translation", "weights"])
     }
 
+    /// Die Ruhepose lässt sich als Haltung schreiben (Grundlage des weichen Übergangs).
+    func testRestPoseAsPose() {
+        let rig = MotionRig(model: model, params: BodyParams())
+        let skin = rig.skin(rig.frame(rotations: rig.restRotations, offset: rig.restOffset).moves)
+        var worst = 0.0
+        for (a, b) in zip(skin, rig.vertices) { worst = max(worst, abs(a.x - b.x), abs(a.y - b.y), abs(a.z - b.z)) }
+        XCTAssertLessThan(worst, 1e-5)
+    }
+
+    /// Übergang aus der Ruhepose in Bild 0 und zurück: ohne Sprünge, Füße am Boden, Rückweg = Hinweg rückwärts.
+    func testPreviewTransition() throws {
+        let params = BodyParams()
+        let rest = model.previewMesh(params).vertices
+        func distance(_ a: [Vec3], _ b: [Vec3]) -> Double {
+            zip(a, b).map { a, b in ((a - b) * (a - b)).sum().squareRoot() }.max() ?? 0
+        }
+        for clip in Self.library.clips {
+            let first = try XCTUnwrap(model.previewFrames(params, clip: clip, face: Self.face).first).vertices
+            let into = model.previewTransition(params, clip: clip, face: Self.face, steps: 12)
+            let back = model.previewTransition(params, clip: clip, face: Self.face, steps: 12, toRest: true)
+            XCTAssertEqual(into.count, 12)
+            XCTAssertEqual(back.count, 12)
+            let path = [rest] + into.map(\.vertices) + [first]
+            let jump = zip(path, path.dropFirst()).map { distance($0, $1) }.max() ?? 0
+            XCTAssertLessThan(jump, 0.08, "\(clip.key): größter Schritt je Bild")
+            for mesh in into { XCTAssertEqual(mesh.vertices.map(\.y).min()!, 0, accuracy: 0.03, clip.key) }
+            for (a, b) in zip(into, back.reversed()) { XCTAssertLessThan(distance(a.vertices, b.vertices), 1e-9, clip.key) }
+        }
+    }
+
     /// Vorschau: ein Bild je Schleifenschritt, Füße auf dem Boden, Gehen bleibt auf der Stelle.
     func testPreviewFrames() throws {
         let walk = try XCTUnwrap(Self.library.clip("gehen"))

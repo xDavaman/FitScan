@@ -103,6 +103,14 @@ def test_clip_files_are_current(model):
     assert json.loads(FACE.read_text("utf-8")) == swiftdata.face_rig_data(model), STALE
 
 
+def test_motion_rig_rest_pose(data):
+    """Die Ruhepose als Haltung ergibt die unbewegte Haut (Übergang Ruhepose → Bewegung in der App)."""
+    rig = swiftdata.MotionRig(data, swiftdata.REFERENCE_BODIES["frau_60"])
+    rotations, offset = rig.rest_pose()
+    _, moves = rig.frame(rotations, offset)
+    assert np.abs(rig.skin(moves) - rig.vertices).max() < 1e-5
+
+
 def test_motion_rig_matches_play(model, data):
     """Der Rechenweg der App für Bewegungen trifft `motion.play`, `gltf_channels` und `face_morphs`."""
     from fitscan.clips import DATA as CLIP_DATA

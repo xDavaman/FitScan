@@ -22,6 +22,14 @@ struct BodyMesh {
     }
 }
 
+/// Bilder einer Bewegung für die Vorschau: weicher Übergang aus der Ruhepose, die Bewegung selbst
+/// und der Übergang zurück.
+struct MotionFrames {
+    var intro: [BodyMesh] = []
+    var main: [BodyMesh] = []
+    var outro: [BodyMesh] = []
+}
+
 /// Maßbänder als dünne Schläuche, je Umfang ein Netz.
 struct TapeMeshes {
     struct Tube {
@@ -68,7 +76,7 @@ final class BodyScene: ObservableObject {
     @Published private(set) var playing: String?
     private var restGeometry: SCNGeometry?
     /// Zuletzt gerechnete Bewegung, damit ein zweiter Tipp nicht neu rechnet
-    private var lastMotion: (key: String, geometries: [SCNGeometry], fps: Double, loop: Bool)?
+    private var lastMotion: Flipbook?
     /// Zählt Start und Stopp, damit eine verspätete Fertig-Meldung keine neuere Bewegung beendet
     private var motionToken = 0
     private var tapesWanted = false
@@ -176,13 +184,27 @@ final class BodyScene: ObservableObject {
         return geometry
     }
 
-    /// Bewegung abspielen: die fertig gerechneten Bilder nacheinander zeigen. Eine Schleife läuft,
-    /// bis `stopMotion` kommt, sonst einmal; danach steht wieder die Ruhepose da und `then` läuft.
-    func play(_ key: String, frames: [BodyMesh], fps: Double, loop: Bool, then: (@MainActor () -> Void)? = nil) {
-        guard let first = frames.first, fps > 0 else { return }
+    private struct Flipbook {
+        let key: String
+        let intro: [SCNGeometry]
+        let main: [SCNGeometry]
+        let outro: [SCNGeometry]
+        let fps: Double
+        let loop: Bool
+    }
+
+    /// Bewegung abspielen: die fertig gerechneten Bilder nacheinander zeigen, mit weichem Übergang
+    /// aus der Ruhepose. Eine Schleife läuft, bis `stopMotion` kommt; sonst einmal, mit Übergang zurück
+    /// in die Ruhepose, danach läuft `then`.
+    func play(_ key: String, frames: MotionFrames, fps: Double, loop: Bool, then: (@MainActor () -> Void)? = nil) {
+        guard let first = frames.main.first, fps > 0 else { return }
         // Alle Bilder teilen sich die Dreiecke, nur Punkte und Normalen ändern sich
         let element = SCNGeometryElement(indices: first.indices, primitiveType: .triangles)
-        lastMotion = (key, frames.map { makeGeometry($0, element: element) }, fps, loop)
+        lastMotion = Flipbook(key: key,
+                              intro: frames.intro.map { makeGeometry($0, element: element) },
+                              main: frames.main.map { makeGeometry($0, element: element) },
+                              outro: frames.outro.map { makeGeometry($0, element: element) },
+                              fps: fps, loop: loop)
         replay(key, then: then)
     }
 
@@ -195,16 +217,17 @@ final class BodyScene: ObservableObject {
         let token = motionToken
         playing = key
         tapes.isHidden = true
-        let flipbook = Self.flipbook(motion.geometries, fps: motion.fps)
         if motion.loop {
-            body.runAction(.repeatForever(flipbook), forKey: "bewegung")
+            body.runAction(Self.flipbook(motion.intro + motion.main, fps: motion.fps, repeatFrom: motion.intro.count),
+                           forKey: "bewegung")
         } else {
             let done = Self.onMain { [weak self] in
                 guard let self, self.motionToken == token else { return }
                 self.stopMotion()
                 then?()
             }
-            body.runAction(.sequence([flipbook, done]), forKey: "bewegung")
+            let all = motion.intro + motion.main + motion.outro
+            body.runAction(.sequence([Self.flipbook(all, fps: motion.fps, repeatFrom: nil), done]), forKey: "bewegung")
         }
         return true
     }
@@ -218,13 +241,17 @@ final class BodyScene: ObservableObject {
         tapes.isHidden = !tapesWanted
     }
 
-    /// Tauscht das Netz des Knotens Bild für Bild. Außerhalb des Main Actors gebaut, weil SceneKit
-    /// Aktionen auf seinem eigenen Render-Thread ausführt.
-    nonisolated private static func flipbook(_ geometries: [SCNGeometry], fps: Double) -> SCNAction {
+    /// Tauscht das Netz des Knotens Bild für Bild. Mit `repeatFrom` laufen die Bilder ab dort in
+    /// Schleife (bis `stopMotion`, längstens einen Tag), sonst einmal. Außerhalb des Main Actors gebaut,
+    /// weil SceneKit Aktionen auf seinem eigenen Render-Thread ausführt.
+    nonisolated private static func flipbook(_ geometries: [SCNGeometry], fps: Double, repeatFrom: Int?) -> SCNAction {
         let count = geometries.count
-        return .customAction(duration: Double(count) / fps) { node, elapsed in
-            let i = min(max(Int(Double(elapsed) * fps), 0), count - 1)
-            if node.geometry !== geometries[i] { node.geometry = geometries[i] }
+        let duration = repeatFrom == nil ? Double(count) / fps : 24 * 3600
+        return .customAction(duration: duration) { node, elapsed in
+            var i = max(Int(Double(elapsed) * fps), 0)
+            if let start = repeatFrom, i >= count, start < count { i = start + (i - start) % (count - start) }
+            let geometry = geometries[min(i, count - 1)]
+            if node.geometry !== geometry { node.geometry = geometry }
         }
     }
 

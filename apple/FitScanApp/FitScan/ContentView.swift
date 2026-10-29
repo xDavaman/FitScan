@@ -161,7 +161,7 @@ struct HomeView: View {
             return
         }
         let frames = await app.motionFrames(clip, params: params)
-        guard !Task.isCancelled, !frames.isEmpty else {
+        guard !Task.isCancelled, !frames.main.isEmpty else {
             scene.setRotating(true)
             return
         }

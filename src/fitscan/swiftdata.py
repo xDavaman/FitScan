@@ -509,6 +509,13 @@ class MotionRig:
         blend = np.einsum("vk,vkij->vij", self.weights, moves[self.indices])
         return np.einsum("vij,vj->vi", blend[:, :3, :3], v) + blend[:, :3, 3]
 
+    def rest_pose(self) -> tuple[np.ndarray, np.ndarray]:
+        """Die Ruhepose als Haltung (Drehungen, Hüfte), wie `MotionRig.restRotations`/`restOffset`:
+        `frame` ergibt damit die unbewegte Haut. Grundlage des weichen Übergangs in der App."""
+        rot = np.stack([self.ref[j][:3, :3].T if p < 0 else self.ref[p][:3, :3] @ self.ref[j][:3, :3].T
+                        for j, p in enumerate(self.parents)])
+        return rot, self.heads[self.parents.index(-1)].copy()
+
     def clip_frame(self, clip: dict, f: int, in_place: bool = False) -> tuple[np.ndarray, np.ndarray]:
         rot = np.repeat(np.eye(3)[None], len(self.parents), 0)
         flat = np.asarray(clip["rotations"][f], np.float64).reshape(-1, 4)
