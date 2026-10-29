@@ -1,7 +1,8 @@
 # FitScan für iPhone
 
 Das iPhone baut aus Größe, Gewicht, Maßband-Werten und nach Wunsch einem Drehvideo oder Fotos Annys
-Körpermodell, zeigt es in 3D und gibt es als GLB an Blender und Cascadeur weiter. Alles läuft offline
+Körpermodell, zeigt es in 3D, lässt es winken, rufen, sprechen und gehen und gibt es als GLB an Blender und
+Cascadeur weiter. Alles läuft offline
 auf dem Gerät.
 
 Ausbau in Etappen, je ein Pull Request, nach dem Merge per Kabel auf Sean-Johns iPhone:
@@ -9,9 +10,9 @@ Ausbau in Etappen, je ein Pull Request, nach dem Merge per Kabel auf Sean-Johns 
 | Etappe | Inhalt | Stand |
 |---|---|---|
 | 0 | Modell aus Maßen, 3D-Vorschau, GLB teilen, Verlauf | auf main |
-| 1 | Startbildschirm mit Begrüßung und drehendem Modell, Maßbänder in der Vorschau, Scan-Anleitung, Willkommen beim ersten Start, Nachbearbeitung (Maße ändern, Form-Regler mit Live-Vorschau) | in Arbeit |
-| 2 | Animationen winken, rufen, sprechen, gehen (Clips aus der Bewegungsbibliothek) | geplant |
-| 3 | Scan aus Fotos und Videos der Mediathek: Apple Vision (Personenmaske, Körperpunkte), Form an die Umrisse angepasst, Kontrollbilder | in Arbeit |
+| 1 | Startbildschirm mit Begrüßung und drehendem Modell, Maßbänder in der Vorschau, Scan-Anleitung, Willkommen beim ersten Start, Nachbearbeitung (Maße ändern, Form-Regler mit Live-Vorschau) | auf main |
+| 2 | Bewegungen winken, rufen, sprechen, gehen in der Vorschau (Startbildschirm winkt zur Begrüßung), GLB mit Animationen und 52 Gesichtsreglern | in Arbeit |
+| 3 | Scan aus Fotos und Videos der Mediathek: Apple Vision (Personenmaske, Körperpunkte), Form an die Umrisse angepasst, Kontrollbilder | auf main |
 | 4 | Kamera-Scan mit Ampel (Regeln wie `quality.py`) | geplant |
 | 5 | Gesicht über Frontkamera und Face-ID-Sensor | geplant |
 
@@ -20,6 +21,7 @@ Ausbau in Etappen, je ein Pull Request, nach dem Merge per Kabel auf Sean-Johns 
 | `FitScanCore/` | Swift-Paket ohne Oberfläche: Anny-Körper, Maße wie mit dem Maßband, Anpassung an Maße, GLB-Export, Personen und Verlauf |
 | `FitScanCore/Sources/FitScanCore/Resources/anny_v1.fsan` | Annys Daten (CC0), geschrieben von `scripts/export_swift_data.py` |
 | `FitScanCore/Sources/FitScanCore/Resources/fotoscan.json` | Einstellungen des Fotoscans (Gelenke, Regler, Gewichte), ebenfalls vom PC |
+| `FitScanCore/Sources/FitScanCore/Resources/bewegungen.json`, `mimik.json` | Bewegungen aus der Bibliothek (Gelenkdrehungen, Hüfte, Mimik-Kurven) und Annys 52 Gesichtsregler, vom PC |
 | `FitScanCore/Tests/` | Tests gegen die Prüfwerte vom PC (`referenz.json`) |
 | `FitScanApp/` | iPhone-App (SwiftUI, SceneKit), Xcode-Projekt `FitScan.xcodeproj`, Schema `FitScan`. Neue Dateien in `FitScanApp/FitScan/` nimmt Xcode von selbst auf. |
 
@@ -35,11 +37,12 @@ Keine fremden Bibliotheken: nur Foundation, SwiftUI, SceneKit, Vision, AVFoundat
 | `photofit.fit_photos` (eingeschränkte Fassung von `fit.fit_to_frames`) | `fitPhotos`: Abstandsbild der Maske, Randpunkte, Körperpunkte, eigene kleine Kinematik, Gradienten von Hand (am PC gegen PyTorch geprüft) |
 | `vision.py` (MediaPipe) | Apple Vision in der App: `VNGeneratePersonSegmentationRequest`, `VNDetectHumanBodyPoseRequest` |
 | `export.build_rig`, `write_glb` | `buildRig`, `writeGLB`: Bodengelenk, 4 Einflüsse je Punkt, 4 Formregler |
+| `motion.play`, `motion.export_glb` | `MotionRig`, `previewFrames`, `writeGLB(…, clips:, face:)`: Gelenkdrehungen relativ zur Bezugshaltung, Hüfte in Hüfthöhen, glTF-Animationen, Gesichtsregler an die Gesichtsgröße angepasst |
 | `store.Store` | `PersonStore`: Dokumente-Ordner der App, auch in der Dateien-App sichtbar |
 
 Am PC geprüft (`tests/test_swiftdata.py`): Annys Daten in der App treffen den PC auf 0,01 mm. Die
 Ableitungen der Anpassung weichen um 0,01 % von PyTorch ab, und ein numpy-Nachbau der Swift-Schleife
-ergibt dieselben Maße wie der PC.
+ergibt dieselben Maße wie der PC. Die Bewegungen treffen `motion.play` auf 0,01 mm (Knochen, Haut, Mimik).
 
 ## Auf dem Mac bauen und testen
 
@@ -64,6 +67,11 @@ Fotoscan (Etappe 3) am besten auf dem iPhone prüfen, weil die Personenmaske von
 läuft: *Neuer Scan › Aus Fotos und Videos*, ein Drehvideo oder vier Fotos (vorn, beide Seiten, hinten) wählen,
 Größe und Gewicht eintragen, berechnen. Das Schema startet die App als Release-Build; im Debug-Build dauert die
 Anpassung ein Vielfaches.
+
+Bewegungen (Etappe 2): Beim Start winkt das Modell einmal von vorn und dreht sich danach. Im Modell unter
+*Bewegungen* Winken, Rufen, Sprechen oder Gehen tippen (beim ersten Mal wird kurz gerechnet), nochmal tippen hält an.
+Unter *Weitergeben › Dateien mit Bewegungen erstellen* entstehen `koerper_bewegungen.glb` und
+`koerper_bewegungen_unreal.glb`; in Blender liegen die vier Bewegungen als Aktionen im Action Editor.
 
 ## TestFlight
 

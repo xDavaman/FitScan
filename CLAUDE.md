@@ -48,7 +48,7 @@ Technischer Plan: https://claude.ai/code/artifact/e834733a-d72b-4a65-bdea-881002
 | `pipeline.py` | Gesamtablauf `scan()`, `body_from_measurements()`, `reexport()` |
 | `synthetic.py`, `selftest.py` | künstliche Testkörper und -videos mit bekannten Maßen |
 | `ui.py`, `live.py`, `cli.py` | Gradio-Oberfläche, Webcam-Ampel, Befehle |
-| `swiftdata.py` | Annys Daten als `anny_v1.fsan` für die iPhone-App, numpy-Nachbau des Swift-Rechenwegs, Prüfwerte (`referenz.json`) |
+| `swiftdata.py` | Annys Daten als `anny_v1.fsan` für die iPhone-App, Bewegungen (`bewegungen.json`) und Gesichtsregler (`mimik.json`), numpy-Nachbau des Swift-Rechenwegs (auch `MotionRig`), Prüfwerte (`referenz.json`) |
 
 ## Konventionen
 
@@ -95,7 +95,7 @@ uv pip install -p .venv/bin/python -e ".[prototyp,dev]"
 ## iPhone-App (`apple/`)
 
 - `apple/FitScanCore`: Swift-Paket ohne Oberfläche (Körper, Maße, Anpassung an Maße, GLB-Export, Speichern),
-  rechnet wie `body.py`, `measure.py`, `fit.fit_to_measurements`, `export.py`, `store.py`. Nur Apple-Frameworks.
+  rechnet wie `body.py`, `measure.py`, `fit.fit_to_measurements`, `photofit.py`, `export.py`, `motion.play`, `store.py`. Nur Apple-Frameworks.
 - `apple/FitScanApp/FitScan.xcodeproj`, Schema `FitScan`, Bundle-ID `com.xdavaman.fitscan`, iOS 17.
 - Daten und Prüfwerte neu schreiben, wenn sich Anny, Regler oder Rechenweg ändern:
   `python scripts/export_swift_data.py`, danach `pytest tests/test_swiftdata.py` (schlägt sonst fehl).

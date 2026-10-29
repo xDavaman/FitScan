@@ -304,6 +304,6 @@ public extension BodyModel {
                                    deltas: face.dense(action, count: numVertices, scale: s).map { toYUp * $0 }))
             }
         }
-        try rig.glb(name: name, animations: clips.map { motion.animation($0) }).write(to: url)
+        try rig.glb(name: name, animations: clips.map { motion.animation($0) }).write(to: url, options: .atomic)
     }
 }

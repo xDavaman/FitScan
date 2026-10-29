@@ -45,13 +45,20 @@ final class AppModel: ObservableObject {
     private(set) var model: BodyModel?
     /// Einstellungen des Foto- und Videoscans (vom PC mitgeliefert)
     private(set) var photoSettings: PhotoScanSettings?
+    /// Bewegungen (Winken, Rufen, Sprechen, Gehen) und Gesichtsregler, vom PC mitgeliefert
+    private(set) var motions: [MotionClip] = []
+    private(set) var faceRig: FaceRig?
     private var store: PersonStore?
 
     func start() async {
         guard model == nil else { return }
         do {
-            let loaded = try await Task.detached(priority: .userInitiated) { try BodyModel.bundled() }.value
+            let (loaded, library, face) = try await Task.detached(priority: .userInitiated) {
+                (try BodyModel.bundled(), try? MotionLibrary.bundled(), try? FaceRig.bundled())
+            }.value
             model = loaded
+            motions = library?.clips ?? []
+            faceRig = face
             photoSettings = try? PhotoScanSettings.bundled()
             store = try PersonStore.appDefault()
             reloadScans()
@@ -169,6 +176,46 @@ final class AppModel: ObservableObject {
             problems = [error.localizedDescription]
             return nil
         }
+    }
+
+    /// Bilder einer Bewegung mit dieser Körperform für die Vorschau, im Hintergrund gerechnet.
+    func motionFrames(_ clip: MotionClip, params: BodyParams) async -> [BodyMesh] {
+        guard let model else { return [] }
+        let face = faceRig
+        return await Task.detached(priority: .userInitiated) {
+            model.previewFrames(params, clip: clip, face: face).map { BodyMesh($0) }
+        }.value
+    }
+
+    static func motionFileName(_ naming: BoneNaming) -> String {
+        naming == .unreal ? "koerper_bewegungen_unreal.glb" : "koerper_bewegungen.glb"
+    }
+
+    /// GLB mit allen Bewegungen und den Gesichtsreglern. Wird einmal geschrieben und liegt dann im
+    /// Ordner des Scans; ein Scan ändert sich nicht mehr (Bearbeiten legt einen neuen an).
+    func motionGLB(_ record: ScanRecord, naming: BoneNaming) async throws -> URL {
+        guard let model, let store, let params = params(of: record) else {
+            throw FitScanError.data("Die App ist noch nicht bereit.")
+        }
+        guard !motions.isEmpty else { throw FitScanError.data("Die Bewegungen fehlen in der App.") }
+        let url = store.folder(of: record).appendingPathComponent(Self.motionFileName(naming))
+        if FileManager.default.fileExists(atPath: url.path) { return url }
+        let clips = motions, face = faceRig
+        try await Task.detached(priority: .userInitiated) {
+            try model.writeGLB(params, to: url, naming: naming, clips: clips, face: face)
+        }.value
+        return url
+    }
+
+    /// Schon geschriebene GLB-Dateien mit Bewegungen.
+    func motionFiles(of record: ScanRecord) -> [BoneNaming: URL] {
+        var out: [BoneNaming: URL] = [:]
+        for naming in BoneNaming.allCases {
+            if let url = file(Self.motionFileName(naming), of: record), FileManager.default.fileExists(atPath: url.path) {
+                out[naming] = url
+            }
+        }
+        return out
     }
 
     /// Kontrollbilder eines Scans aus Bildern, falls vorhanden.

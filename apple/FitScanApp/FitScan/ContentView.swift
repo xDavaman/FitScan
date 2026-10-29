@@ -45,8 +45,10 @@ struct ContentView: View {
 /// Startbildschirm: Begrüßung, das eigene Modell groß im Vordergrund, darunter die nächsten Schritte.
 struct HomeView: View {
     @EnvironmentObject var app: AppModel
-    @StateObject private var scene = BodyScene(rotating: true)
+    @StateObject private var scene = BodyScene()
     @State private var shownID: String?
+    @State private var greeted = false
+    @AppStorage("begruessungGesehen") private var welcomeSeen = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -102,7 +104,7 @@ struct HomeView: View {
                 .ignoresSafeArea()
         )
         .toolbar(.hidden, for: .navigationBar)
-        .task(id: app.latest?.id ?? "beispiel") { await showLatest() }
+        .task(id: "\(app.latest?.id ?? "beispiel")|\(welcomeSeen)") { await showLatest() }
     }
 
     private var greeting: String {
@@ -134,12 +136,39 @@ struct HomeView: View {
     private func showLatest() async {
         guard let model = app.model else { return }
         let record = app.latest
-        guard shownID != (record?.id ?? "beispiel") else { return }
+        let id = record?.id ?? "beispiel"
         let params = record.flatMap { app.params(of: $0) } ?? BodyParams()
-        let mesh = await Task.detached(priority: .userInitiated) { BodyMesh(model: model, params: params) }.value
-        guard !Task.isCancelled else { return }  // inzwischen kam ein neueres Modell
-        scene.show(mesh)
-        shownID = record?.id ?? "beispiel"
+        if shownID != id {
+            let mesh = await Task.detached(priority: .userInitiated) { BodyMesh(model: model, params: params) }.value
+            guard !Task.isCancelled else { return }  // inzwischen kam ein neueres Modell
+            scene.show(mesh)
+            shownID = id
+        }
+        guard welcomeSeen else { return }  // erst winken, wenn die Begrüßungsseiten zu sind
+        if greeted {
+            if scene.playing == nil { scene.setRotating(true) }
+            return
+        }
+        greeted = true
+        await wave(params)
+    }
+
+    /// Beim Start winkt das Modell einmal von vorn und dreht sich danach.
+    private func wave(_ params: BodyParams) async {
+        let scene = self.scene
+        guard let clip = app.motions.first(where: { $0.key == "winken" }) else {
+            scene.setRotating(true)
+            return
+        }
+        let frames = await app.motionFrames(clip, params: params)
+        guard !Task.isCancelled, !frames.isEmpty else {
+            scene.setRotating(true)
+            return
+        }
+        scene.resetView()
+        scene.play(clip.key, frames: frames, fps: clip.fps, loop: false) { [weak scene] in
+            scene?.setRotating(true)
+        }
     }
 }
 
