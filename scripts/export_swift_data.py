@@ -21,6 +21,7 @@ REFERENCE = ROOT / "apple/FitScanCore/Tests/FitScanCoreTests/Resources/referenz.
 SETTINGS = ROOT / "apple/FitScanCore/Sources/FitScanCore/Resources/fotoscan.json"
 CLIPS = ROOT / "apple/FitScanCore/Sources/FitScanCore/Resources/bewegungen.json"
 FACE = ROOT / "apple/FitScanCore/Sources/FitScanCore/Resources/mimik.json"
+SCAN_RULES = ROOT / "apple/FitScanCore/Sources/FitScanCore/Resources/scanregeln.json"
 
 
 def main() -> None:
@@ -32,6 +33,8 @@ def main() -> None:
     print(f"Anny-Daten: {path.relative_to(ROOT)} ({path.stat().st_size / 1e6:.1f} MB)")
     SETTINGS.write_text(json.dumps(swiftdata.photo_settings(), ensure_ascii=False, indent=1) + "\n", "utf-8")
     print(f"Fotoscan-Einstellungen: {SETTINGS.relative_to(ROOT)}")
+    SCAN_RULES.write_text(json.dumps(swiftdata.scan_rules(), ensure_ascii=False, indent=1) + "\n", "utf-8")
+    print(f"Regeln des Scan-Assistenten: {SCAN_RULES.relative_to(ROOT)}")
     library, face = swiftdata.clip_library(), swiftdata.face_rig_data(model)
     for target, content in ((CLIPS, library), (FACE, face)):
         target.write_text(json.dumps(content, ensure_ascii=False, separators=(",", ":")) + "\n", "utf-8")
@@ -41,6 +44,7 @@ def main() -> None:
         anny = swiftdata.AnnyData(path)
         ref["fotoscan"] = swiftdata.photo_reference(model, anny)
         ref["bewegungen"] = swiftdata.motion_reference(model, anny, library, face)
+        ref["scan"] = swiftdata.scan_reference()
         REFERENCE.parent.mkdir(parents=True, exist_ok=True)
         REFERENCE.write_text(json.dumps(ref, ensure_ascii=False, separators=(",", ":")), "utf-8")
         print(f"Prüfwerte: {REFERENCE.relative_to(ROOT)} ({REFERENCE.stat().st_size / 1e3:.0f} kB)")

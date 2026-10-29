@@ -19,6 +19,7 @@ Im JSON stehen Namen, Anker und für jedes Feld Lage, Typ und Form im (entpackte
 from __future__ import annotations
 
 import json
+import math
 import struct
 import zlib
 from pathlib import Path
@@ -607,3 +608,153 @@ def motion_reference(model: BodyModel, data: AnnyData, library: dict, face: dict
         bodies[body] = {"params": params.to_json(), "clips": clips, "face": face_sample}
     return {"sample": sample, "bodies": bodies, "clips": [c["key"] for c in library["clips"]],
             "face_actions": len(face["actions"])}
+
+
+# --- Scan-Assistent für den Kamera-Scan der App (Etappe 4) ---
+
+#: Nur in der App: grobe Blickrichtung aus 2D-Punkten und Ablauf der Aufnahme. Blickrichtung aus
+#: Schulterbreite geteilt durch Rumpflänge, mit Vorzeichen (linke Schulter rechts im Bild = Blick zur
+#: Kamera). Am Drehvideo IMG_4993 mit MediaPipe gemessen: vorn ≈ +0,7, Rücken ≈ −0,75, Seite 0,1 bis 0,25.
+LIVE_RULES = {
+    "side_shoulder_ratio": 0.35,
+    "confirm_checks": 2,  # so viele Prüfungen in Folge, bis eine Ansicht zählt
+    "check_interval_s": 0.2,
+    "capture_interval_s": 0.75,
+    "green_hold_s": 1.5,  # so lange grün, dann startet der Countdown
+    "yellow_start_s": 8.0,  # gelb (brauchbar) so lange ohne Grün: trotzdem starten
+    "max_turn_s": 45.0,
+    "max_frames": 24,
+}
+#: Regeln aus `quality.check_frame`, die live wegfallen: brauchen Farbe oder feine Kanten im vollen Bild
+LIVE_SKIPPED = ("farbstich", "socken", "kontrast", "hintergrund")
+#: Körperpunkte, die Apple Vision liefert (MediaPipe-Nummern); Fersen und Zehen fehlen dort
+VISION_KEYPOINTS = (0, 2, 5, 7, 8, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28)
+
+
+def scan_rules() -> dict:
+    """Grenzwerte und Hinweise des Scan-Assistenten für die App (`scanregeln.json`)."""
+    from .quality import HINTS, LIMITS
+
+    return {"format": "fitscan-scanregeln", "version": 1, "limits": LIMITS,
+            "hints": {code: {"text": text, "level": level} for code, (text, level) in HINTS.items()},
+            "live": LIVE_RULES, "skipped": list(LIVE_SKIPPED)}
+
+
+SCAN_SIZE = (180, 320)  # Breite, Höhe der künstlichen Prüfbilder
+
+
+def _scan_person(arm_deg: float = 30.0, elbow_deg: float = 180.0, feet_ratio: float = 1.4, scale: float = 1.0,
+                 shift: tuple[float, float] = (0.0, 0.0)) -> np.ndarray:
+    """Körperpunkte (33, 3) einer Person von vorn im Prüfbild; Fersen und Zehen unsichtbar."""
+    kp = np.zeros((33, 3))
+    cx, s = 90.0 + shift[0], scale
+
+    def at(x: float, y: float) -> np.ndarray:
+        return np.array([cx + s * x, shift[1] + 40 + s * (y - 40), 1.0])
+
+    for i in range(11):
+        kp[i] = at(0, 62)
+    kp[2], kp[5], kp[7], kp[8] = at(7, 58), at(-7, 58), at(14, 62), at(-14, 62)
+    kp[11], kp[12] = at(28, 100), at(-28, 100)  # linke Schulter rechts im Bild: Blick zur Kamera
+    kp[23], kp[24] = at(14, 180), at(-14, 180)
+    a = math.radians(arm_deg)
+    bend = math.radians(180.0 - elbow_deg)
+    for sh, el, wr, side in ((11, 13, 15, 1), (12, 14, 16, -1)):
+        d = np.array([side * math.sin(a), math.cos(a)])
+        kp[el] = np.r_[kp[sh, :2] + s * 50 * d, 1.0]
+        b = side * bend  # Unterarm nach innen gebeugt
+        d2 = np.array([d[0] * math.cos(b) - d[1] * math.sin(b), d[0] * math.sin(b) + d[1] * math.cos(b)])
+        kp[wr] = np.r_[kp[el, :2] + s * 45 * d2, 1.0]
+    half = feet_ratio * 28 / 2
+    for knee, ankle, side in ((25, 27, 1), (26, 28, -1)):
+        kp[knee] = at(side * (14 + half) / 2, 235)
+        kp[ankle] = at(side * half, 285)
+    for heel, toe, ankle in ((29, 31, 27), (30, 32, 28)):
+        kp[heel] = np.r_[kp[ankle, :2] + (0, 3 * s), 0.0]
+        kp[toe] = np.r_[kp[ankle, :2] + (0, 6 * s), 0.0]
+    return kp
+
+
+def _scan_image(kp: np.ndarray, person_luma: int, background_luma: int, shine: bool = False,
+                top_cut: bool = False) -> tuple[np.ndarray, np.ndarray]:
+    """Graubild (gestreifte Person, glatter Hintergrund) und Maske aus den Körperpunkten."""
+    import cv2
+
+    w, h = SCAN_SIZE
+    mask = np.zeros((h, w), np.uint8)
+    s = np.linalg.norm(kp[11, :2] - kp[23, :2]) / 80.0
+
+    def p(i: int) -> tuple[int, int]:
+        return int(round(kp[i, 0])), int(round(kp[i, 1]))
+
+    head_r = int(round(20 * s))
+    cv2.circle(mask, p(0), head_r, 1, -1)
+    if top_cut:
+        cv2.rectangle(mask, (p(0)[0] - 8, 0), (p(0)[0] + 8, p(0)[1]), 1, -1)
+    cv2.fillConvexPoly(mask, np.array([p(11), p(12), p(24), p(23)], np.int32), 1)
+    for a, b, t in ((11, 13, 9), (13, 15, 8), (12, 14, 9), (14, 16, 8), (23, 25, 14), (25, 27, 12),
+                    (24, 26, 14), (26, 28, 12), (11, 12, 10), (23, 24, 16)):
+        cv2.line(mask, p(a), p(b), 1, max(2, int(round(t * s))))
+    for ankle in (27, 28):
+        x, y = p(ankle)
+        cv2.ellipse(mask, (x, y + 3), (max(2, int(6 * s)), max(2, int(4 * s))), 0, 0, 360, 1, -1)
+    gray = np.full((h, w), background_luma, np.int32)
+    stripes = np.where(np.arange(h) % 4 < 2, 25, -25)[:, None]
+    gray = np.where(mask > 0, person_luma + stripes, gray)
+    if shine:  # helle Stelle auf der Brust
+        y0 = int(kp[11, 1]) + 5
+        gray[y0:y0 + 14, int(kp[12, 0]) + 4:int(kp[11, 0]) - 4] = 250
+        gray = np.where(mask > 0, gray, background_luma)
+    return np.clip(gray, 0, 255).astype(np.uint8), mask
+
+
+def scan_reference() -> dict:
+    """Künstliche Kamerabilder mit den Hinweisen von `quality.check_frame` (Prüfwerte der App).
+    Je Fall: Graubild als PNG, Maske als Lauflängen, Körperpunkte (nur die von Apple Vision), die
+    Schärfe vom PC und die erwarteten Hinweise ohne die live weggelassenen Regeln."""
+    import base64
+
+    import cv2
+
+    from .quality import check_frame
+    from .vision import FrameObservation
+
+    cases = {
+        "gut": dict(kp=_scan_person(), person=140, bg=120),
+        "dunkel": dict(kp=_scan_person(), person=50, bg=60),
+        "gegenlicht": dict(kp=_scan_person(), person=95, bg=200),
+        "glanzlicht": dict(kp=_scan_person(), person=170, bg=120, shine=True),
+        "abgeschnitten": dict(kp=_scan_person(shift=(0, -30)), person=140, bg=120, top_cut=True),
+        "zu_weit_mitte": dict(kp=_scan_person(scale=0.45, shift=(55, 60)), person=140, bg=120),
+        "zu_nah": dict(kp=_scan_person(scale=1.2, shift=(0, -37)), person=140, bg=120),
+        "arme_anliegend": dict(kp=_scan_person(arm_deg=5, feet_ratio=0.5), person=140, bg=120),
+        "arme_hoch": dict(kp=_scan_person(arm_deg=75, elbow_deg=120), person=140, bg=120),
+        "stillhalten": dict(kp=_scan_person(arm_deg=45), prev=_scan_person(arm_deg=30), person=140, bg=120),
+    }
+    out = {}
+    w, h = SCAN_SIZE
+    for name, c in cases.items():
+        gray, mask = _scan_image(c["kp"], c["person"], c["bg"], c.get("shine", False), c.get("top_cut", False))
+        rgb = np.repeat(gray[..., None], 3, -1)
+        obs = FrameObservation(0, 0.0, w, h, persons=1, keypoints=c["kp"], mask=mask.astype(np.float32))
+        prev = None
+        if "prev" in c:
+            prev = FrameObservation(0, 0.0, w, h, persons=1, keypoints=c["prev"], mask=mask.astype(np.float32))
+        q = check_frame(rgb, obs, prev)
+        ok, png = cv2.imencode(".png", gray)
+        assert ok
+        out[name] = {
+            "width": w, "height": h, "luma_png": base64.b64encode(png.tobytes()).decode("ascii"),
+            "mask_runs": mask_runs(mask > 0),
+            "keypoints": {str(i): [round(float(v), 3) for v in c["kp"][i]] for i in VISION_KEYPOINTS},
+            "previous": None if "prev" not in c else
+            {str(i): [round(float(v), 3) for v in c["prev"][i]] for i in VISION_KEYPOINTS},
+            "sharpness": q.metrics.get("sharpness"),
+            "hints": sorted(x.code for x in q.hints if x.code not in LIVE_SKIPPED),
+            "metrics": {k: round(float(v), 4) for k, v in q.metrics.items()},
+        }
+    rng = np.random.default_rng(7)
+    small = rng.integers(0, 256, (12, 17)).astype(np.uint8)
+    out["_laplace"] = {"width": 17, "height": 12, "gray": small.reshape(-1).tolist(),
+                       "variance": float(cv2.Laplacian(small, cv2.CV_64F).var())}
+    return out

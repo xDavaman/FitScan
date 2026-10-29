@@ -95,6 +95,7 @@ def test_mask_runs_round_trip():
 
 CLIPS = ROOT / "apple/FitScanCore/Sources/FitScanCore/Resources/bewegungen.json"
 FACE = ROOT / "apple/FitScanCore/Sources/FitScanCore/Resources/mimik.json"
+SCAN_RULES = ROOT / "apple/FitScanCore/Sources/FitScanCore/Resources/scanregeln.json"
 
 
 def _face_deltas(face: dict) -> dict[str, dict[int, np.ndarray]]:
@@ -164,3 +165,30 @@ def test_motion_reference_is_current(model):
     assert abs(clip["hip_height"] - pb.hip_height) < 1e-6, STALE
     f = clip["frames"][1]
     assert np.abs(np.array(f["vertices"]) - pb.vertices[f["frame"]][ref["sample"]]).max() < 1e-5, STALE
+
+
+def test_scan_rules_are_current():
+    """scanregeln.json hat die Grenzwerte und Hinweise von `quality.py`."""
+    assert json.loads(SCAN_RULES.read_text("utf-8")) == swiftdata.scan_rules(), STALE
+
+
+def test_scan_reference_is_current():
+    """Die künstlichen Kamerabilder und ihre Hinweise in referenz.json passen zu `quality.check_frame`."""
+    import base64
+
+    import cv2
+
+    ref = json.loads(REFERENCE.read_text("utf-8"))["scan"]
+    now = swiftdata.scan_reference()
+    assert ref.keys() == now.keys(), STALE
+    for name, case in now.items():
+        old = ref[name]
+        if name.startswith("_"):
+            assert old == case, STALE
+            continue
+        assert old["hints"] == case["hints"], STALE
+        assert old["keypoints"] == case["keypoints"] and old["mask_runs"] == case["mask_runs"], STALE
+        decode = [cv2.imdecode(np.frombuffer(base64.b64decode(c["luma_png"]), np.uint8), cv2.IMREAD_UNCHANGED)
+                  for c in (old, case)]
+        assert np.array_equal(*decode), STALE
+        assert abs(old["sharpness"] - case["sharpness"]) < 1e-6, STALE

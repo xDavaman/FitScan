@@ -13,7 +13,7 @@ Ausbau in Etappen, je ein Pull Request, nach dem Merge per Kabel auf Sean-Johns 
 | 1 | Startbildschirm mit Begrüßung und drehendem Modell, Maßbänder in der Vorschau, Scan-Anleitung, Willkommen beim ersten Start, Nachbearbeitung (Maße ändern, Form-Regler mit Live-Vorschau) | auf main |
 | 2 | Bewegungen winken, rufen, sprechen, gehen in der Vorschau (Startbildschirm winkt zur Begrüßung), GLB mit Animationen und 52 Gesichtsreglern | in Arbeit |
 | 3 | Scan aus Fotos und Videos der Mediathek: Apple Vision (Personenmaske, Körperpunkte), Form an die Umrisse angepasst, Kontrollbilder | auf main |
-| 4 | Kamera-Scan mit Ampel (Regeln wie `quality.py`) | geplant |
+| 4 | Kamera-Scan: Live-Ampel mit den Regeln von `quality.py`, Ansage, Countdown, eine Drehung wird aufgenommen und wie in Etappe 3 berechnet | in Arbeit |
 | 5 | Gesicht über Frontkamera und Face-ID-Sensor | geplant |
 
 | Ordner | Inhalt |
@@ -22,6 +22,7 @@ Ausbau in Etappen, je ein Pull Request, nach dem Merge per Kabel auf Sean-Johns 
 | `FitScanCore/Sources/FitScanCore/Resources/anny_v1.fsan` | Annys Daten (CC0), geschrieben von `scripts/export_swift_data.py` |
 | `FitScanCore/Sources/FitScanCore/Resources/fotoscan.json` | Einstellungen des Fotoscans (Gelenke, Regler, Gewichte), ebenfalls vom PC |
 | `FitScanCore/Sources/FitScanCore/Resources/bewegungen.json`, `mimik.json` | Bewegungen aus der Bibliothek (Gelenkdrehungen, Hüfte, Mimik-Kurven) und Annys 52 Gesichtsregler, vom PC |
+| `FitScanCore/Sources/FitScanCore/Resources/scanregeln.json` | Grenzwerte und Hinweistexte des Scan-Assistenten aus `quality.py`, dazu die Zeiten des Kamera-Scans, vom PC |
 | `FitScanCore/Tests/` | Tests gegen die Prüfwerte vom PC (`referenz.json`) |
 | `FitScanApp/` | iPhone-App (SwiftUI, SceneKit), Xcode-Projekt `FitScan.xcodeproj`, Schema `FitScan`. Neue Dateien in `FitScanApp/FitScan/` nimmt Xcode von selbst auf. |
 
@@ -36,6 +37,7 @@ Keine fremden Bibliotheken: nur Foundation, SwiftUI, SceneKit, Vision, AVFoundat
 | `fit.fit_to_measurements` (Adam, Autograd) | `fitToMeasurements`: Adam mit von Hand abgeleitetem Gradienten |
 | `photofit.fit_photos` (eingeschränkte Fassung von `fit.fit_to_frames`) | `fitPhotos`: Abstandsbild der Maske, Randpunkte, Körperpunkte, eigene kleine Kinematik, Gradienten von Hand (am PC gegen PyTorch geprüft) |
 | `vision.py` (MediaPipe) | Apple Vision in der App: `VNGeneratePersonSegmentationRequest`, `VNDetectHumanBodyPoseRequest` |
+| `quality.check_frame` | `ScanRules.check`: gleiche Grenzwerte und Texte (`scanregeln.json`); live ohne Farbstich, Socken, Kontrast und Hintergrund |
 | `export.build_rig`, `write_glb` | `buildRig`, `writeGLB`: Bodengelenk, 4 Einflüsse je Punkt, 4 Formregler |
 | `motion.play`, `motion.export_glb` | `MotionRig`, `previewFrames`, `writeGLB(…, clips:, face:)`: Gelenkdrehungen relativ zur Bezugshaltung, Hüfte in Hüfthöhen, glTF-Animationen, Gesichtsregler an die Gesichtsgröße angepasst |
 | `store.Store` | `PersonStore`: Dokumente-Ordner der App, auch in der Dateien-App sichtbar |
@@ -67,6 +69,13 @@ Fotoscan (Etappe 3) am besten auf dem iPhone prüfen, weil die Personenmaske von
 läuft: *Neuer Scan › Aus Fotos und Videos*, ein Drehvideo oder vier Fotos (vorn, beide Seiten, hinten) wählen,
 Größe und Gewicht eintragen, berechnen. Das Schema startet die App als Release-Build; im Debug-Build dauert die
 Anpassung ein Vielfaches.
+
+Kamera-Scan (Etappe 4) nur auf dem iPhone (der Simulator hat keine Kamera): *Neuer Scan › Mit der Kamera*,
+vordere oder hintere Kamera wählen, *Kamera starten*. Das Handy hochkant auf Hüfthöhe hinstellen, zwei Meter
+zurücktreten. Die Ampel und die Ansage sagen, was noch fehlt (Licht, Abstand, Haltung). Bei Grün zählt die App
+herunter, dann einmal langsam drehen; die Punkte vorn, Seite, Rücken, Seite, vorn werden abgehakt. Danach prüft die
+App die Bilder und rechnet wie beim Fotoscan. Zu prüfen: Ampel springt bei Gegenlicht, abgeschnittenen Füßen und
+anliegenden Armen um, die Drehung wird mit beiden Kameras erkannt, die Ansage ist bei stummgeschaltetem Handy zu hören.
 
 Bewegungen (Etappe 2): Beim Start winkt das Modell einmal von vorn (mit weichem Übergang aus der Ruhepose und
 zurück) und dreht sich danach. Im Modell unter

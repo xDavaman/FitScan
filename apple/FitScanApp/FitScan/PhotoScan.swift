@@ -191,6 +191,8 @@ final class PhotoScanner: ObservableObject {
     @Published var error: String?
 
     private var run = 0
+    /// Bilder kommen aus dem Kamera-Scan statt aus der Mediathek
+    private(set) var fromCamera = false
 
     var usable: [ScanImage] { images.filter { $0.frame != nil } }
     var busy: Bool { analyzing != nil || fitting != nil }
@@ -203,13 +205,14 @@ final class PhotoScanner: ObservableObject {
         return (0..<Self.maxFrames).map { all[Int(Double($0) * step)] }
     }
 
-    var source: String { usable.contains { $0.fromVideo } ? "video" : "foto" }
+    var source: String { fromCamera ? "kamera" : usable.contains { $0.fromVideo } ? "video" : "foto" }
 
     func load(_ items: [PhotosPickerItem], fovLongSideDeg: Double) async {
         run += 1
         let current = run
         images = []
         error = nil
+        fromCamera = false
         guard !items.isEmpty else {
             analyzing = nil
             return
@@ -253,5 +256,33 @@ final class PhotoScanner: ObservableObject {
         }
         analyzing = nil
         if result.isEmpty && error == nil { error = "Keine Bilder gefunden." }
+    }
+
+    /// Bilder aus dem Kamera-Scan (JPEG, aufrecht), geprüft wie Bilder aus einem Video.
+    func load(captured: [Data], fovLongSideDeg: Double) async {
+        run += 1
+        let current = run
+        images = []
+        error = nil
+        fromCamera = true
+        guard !captured.isEmpty else {
+            analyzing = nil
+            error = "Es wurden keine Bilder aufgenommen."
+            return
+        }
+        analyzing = 0
+        var result: [ScanImage] = []
+        for (i, data) in captured.enumerated() {
+            let checked = await Task.detached(priority: .userInitiated) { () -> ScanImage? in
+                guard let picked = MediaLoader.photo(data, fovLongSideDeg: fovLongSideDeg) else { return nil }
+                return PersonDetector.analyze(picked.image, focal: picked.focal, fromVideo: true)
+            }.value
+            guard current == run else { return }
+            if let checked { result.append(checked) }
+            analyzing = Double(i + 1) / Double(captured.count)
+            images = result
+        }
+        analyzing = nil
+        if result.isEmpty { error = "Keine Bilder gefunden." }
     }
 }

@@ -172,7 +172,7 @@ struct HomeView: View {
     }
 }
 
-/// Wie das neue Modell entstehen soll. Foto/Video und Kamera folgen in den nächsten Etappen.
+/// Wie das neue Modell entstehen soll: aus Maßen, aus Fotos und Videos oder mit der Kamera.
 struct NewScanView: View {
     @EnvironmentObject var app: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -193,8 +193,12 @@ struct NewScanView: View {
                     method("Aus Fotos und Videos", "Ein Drehvideo oder einige Fotos aus deiner Mediathek.",
                            "photo.on.rectangle", available: true)
                 }
-                method("Mit der Kamera", "Geführter Scan mit Ampel, kommt in einem der nächsten Builds.",
-                       "camera.viewfinder", available: false)
+                NavigationLink {
+                    CameraScanView(onDone: { app.finishedMeasureForm($0) })
+                } label: {
+                    method("Mit der Kamera", "Geführter Scan mit Ampel und Ansage: einmal vor dem Handy drehen.",
+                           "camera.viewfinder", available: true)
+                }
             }
             Section {
                 Button {

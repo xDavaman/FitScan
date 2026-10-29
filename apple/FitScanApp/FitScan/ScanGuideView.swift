@@ -55,7 +55,7 @@ struct ScanGuideView: View {
     var body: some View {
         List {
             Section {
-                Text("So wird dein Modell aus Video oder Fotos möglichst genau. Der Kamera-Scan in einem der nächsten Builds prüft diese Punkte live und zeigt dir eine Ampel.")
+                Text("So wird dein Modell aus Video oder Fotos möglichst genau. Der Kamera-Scan prüft diese Punkte live, zeigt dir eine Ampel und sagt dir, was noch fehlt.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
