@@ -281,3 +281,116 @@ def reference(model: BodyModel, fit_steps: int = 240) -> dict:
             "glb": {"joints": len(model.bone_labels) + 1, "vertices": model.num_vertices,
                     "triangles": int(len(model.faces)),
                     "morphs": ["weight_up", "weight_down", "muscle_up", "muscle_down"]}}
+
+
+# ---------------------------------------------------------------------------- Fotoscan
+
+def photo_settings() -> dict:
+    """Einstellungen des Foto- und Videoscans für FitScanCore (`fotoscan.json`)."""
+    from . import fit, photofit
+    from .camera import DEFAULT_FOV_LONG_SIDE_DEG, KEYPOINT_OFFSETS, MEDIAPIPE_TO_BONE
+
+    return {
+        "format": "fitscan-fotoscan", "version": 1,
+        "work_side": photofit.WORK_SIDE, "contour_points": photofit.CONTOUR_POINTS,
+        "pose_bones": list(fit.POSE_BONES), "video_locals": list(fit.VIDEO_LOCALS),
+        "keypoints": {str(k): {"bone": b, "offset": [round(float(x), 6) for x in KEYPOINT_OFFSETS[k]]}
+                      for k, b in MEDIAPIPE_TO_BONE.items()},
+        "silhouette_weight": fit.SILHOUETTE_WEIGHT, "local_reg": fit.LOCAL_REG, "pose_reg": photofit.POSE_REG,
+        "keypoint_weight_shape": fit.KEYPOINT_WEIGHT_SHAPE, "muscle_starts": list(fit.MUSCLE_STARTS),
+        "learning_rate": photofit.LR, "probe_every": photofit.PROBE_EVERY, "steps": list(photofit.STEPS),
+        "fov_long_side_deg": DEFAULT_FOV_LONG_SIDE_DEG,
+    }
+
+
+def mask_runs(mask: np.ndarray) -> list[int]:
+    """Maske zeilenweise als abwechselnde Lauflängen, beginnend mit Hintergrund."""
+    flat = mask.reshape(-1).astype(np.int8)
+    bounds = np.concatenate([[0], np.flatnonzero(np.diff(flat)) + 1, [len(flat)]])
+    runs = np.diff(bounds).astype(int).tolist()
+    return [0, *runs] if flat[0] else runs
+
+
+def mask_from_runs(runs: list[int], width: int, height: int) -> np.ndarray:
+    flat = np.zeros(width * height, bool)
+    pos = 0
+    for i, n in enumerate(runs):
+        if i % 2:
+            flat[pos:pos + n] = True
+        pos += n
+    return flat.reshape(height, width)
+
+
+PHOTO_BODY = "kraeftig"  # künstlicher Testkörper für die Fotoscan-Prüfwerte
+PHOTO_POSE_SEED = 0.1
+
+
+def photo_reference(model: BodyModel, data: AnnyData) -> dict:
+    """Prüfwerte des Fotoscans: vier künstliche Bilder, Zwischenwerte des Rechenwegs und das Ergebnis."""
+    import math
+
+    import torch
+
+    from . import photofit, synthetic
+    from .body import param_to_age
+    from .camera import MEDIAPIPE_TO_BONE, Intrinsics
+    from .fit import FitFrame, Person
+    from .measure import measure_params
+
+    params = REFERENCE_BODIES[PHOTO_BODY]
+    filmed = synthetic.film(model, params, arm_deg=4.0, views=4, width=360, height=640, seed=5)
+    frames, frames_json = [], []
+    for f in filmed:
+        mask = f.mask > 0.5
+        kp = np.zeros((33, 3))
+        for i in MEDIAPIPE_TO_BONE:
+            kp[i] = np.round(f.keypoints[i].astype(np.float64), 4)
+        intr = Intrinsics(f.intr.width, f.intr.height, float(f.intr.focal), float(f.intr.cx), float(f.intr.cy))
+        frames.append(FitFrame(mask=mask.astype(np.float32), intr=intr, keypoints=kp, yaw_init=f.yaw_init,
+                               calibrated=False))
+        frames_json.append({"width": intr.width, "height": intr.height, "focal": intr.focal, "cx": intr.cx,
+                            "cy": intr.cy, "runs": mask_runs(mask), "yaw_hint": f.yaw_init,
+                            "keypoints": {str(i): kp[i].tolist() for i in MEDIAPIPE_TO_BONE}})
+
+    # Zwischenwerte an einem festen Zustand, mit dem Körper so, wie die App ihn rechnet
+    view = photofit.prepare_view(model, frames[0])
+    rig = photofit.Rig(model)
+    pose = np.array([[PHOTO_POSE_SEED * math.sin(3 * j + c) for c in range(3)] for j in range(len(rig.pose_bones))])
+    rest = data.rest(BodyParams())
+    verts, heads = rest["vertices"].astype(np.float64), rest["bone_heads"].astype(np.float64)
+    rs, ts = photofit.transforms_np(rig, heads, pose)
+    posed = rig.skin(torch.as_tensor(verts), torch.as_tensor(rs), torch.as_tensor(ts)).numpy()
+    b = view.kp_bones
+    kp3 = np.einsum("pij,pj->pi", rs[b], heads[b]) + ts[b]
+    yaw = 0.3
+    trans = photofit._align_translation(torch.as_tensor(posed), torch.tensor(yaw, dtype=torch.float64), view).numpy()
+    loss, g_v, g_k, g_y, g_t = photofit.view_loss_np(posed, kp3, yaw, trans, view, 0.5)
+    g_rest, g_pose = photofit.skin_gradient_np(rig, verts, heads, pose, g_v, b, g_k)
+    sample = list(range(0, model.num_vertices, SAMPLE_STEP))
+    h, w = view.dt.shape
+    pixels = [(x, y) for y in range(0, h, 53) for x in range(0, w, 37)]
+
+    gender = "maennlich" if params.phenotype["gender"] < 0.5 else "weiblich"
+    truth = measure_params(model, params)
+    person = Person(gender=gender, age_years=round(param_to_age(params.phenotype["age"]), 1),
+                    measures={"height": truth["height"], "weight": truth["weight"]})
+    fitted, measures, results = photofit.fit_photos(model, person, frames)
+    return {
+        "body": PHOTO_BODY, "truth": truth, "calibrated": False, "frames": frames_json,
+        "person": {"gender": person.gender, "age_years": person.age_years, "measures": person.measures},
+        "prepared": {
+            "width": w, "height": h, "focal": view.intr.focal, "px_height": view.px_height,
+            "bbox_center": list(view.bbox_center), "pixels": int(view.mask.sum()),
+            "contour_count": len(view.contour), "contour": view.contour[::20].tolist(),
+            "dt": [[x, y, round(float(view.dt[y, x]), 5)] for x, y in pixels],
+            "kp_bones": [model.bone_labels[i] for i in b],
+        },
+        "terms": {
+            "pose": pose.tolist(), "yaw": yaw, "align_trans": trans.tolist(), "keypoint_weight": 0.5,
+            "sample": sample, "posed": posed[sample].tolist(), "loss": loss, "g_yaw": g_y,
+            "g_trans": g_t.tolist(), "g_points": g_v[sample].tolist(), "g_keypoints": g_k.tolist(),
+            "g_rest": g_rest[sample].tolist(), "g_pose": g_pose.tolist(),
+        },
+        "fit": {"measures": measures, "yaw_deg": [r.yaw_deg for r in results], "iou": [r.iou for r in results],
+                "params": fitted.to_json()},
+    }

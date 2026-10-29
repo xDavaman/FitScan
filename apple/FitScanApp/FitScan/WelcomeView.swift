@@ -13,11 +13,11 @@ struct WelcomeView: View {
 
     private let pages = [
         Page(icon: "figure.stand", title: "Willkommen bei FitScan",
-             text: "Aus deinen Maßen, später auch aus Fotos, Videos und der Kamera, entsteht ein 3D-Modell deines Körpers im Maßstab 1:1. Mit Skelett, bereit für Blender und Cascadeur."),
+             text: "Aus deinen Maßen oder aus Fotos und Videos entsteht ein 3D-Modell deines Körpers im Maßstab 1:1. Mit Skelett, bereit für Blender und Cascadeur."),
         Page(icon: "lock.iphone", title: "Alles bleibt auf deinem iPhone",
              text: "FitScan rechnet ohne Internet. Deine Maße, Bilder und Modelle verlassen das Gerät nur, wenn du sie selbst teilst."),
         Page(icon: "ruler", title: "So geht es los",
-             text: "Tippe auf „Neuer Scan“ und gib Größe und Gewicht ein. Mit Maßband-Werten für Brust, Taille und Hüfte wird das Modell noch genauer. Danach kannst du die Form mit Reglern nachbearbeiten."),
+             text: "Tippe auf „Neuer Scan“. Wähle ein Drehvideo oder einige Fotos von dir oder gib nur deine Maße ein. Größe und Gewicht sind Pflicht, Maßband-Werte machen das Modell genauer. Danach kannst du die Form mit Reglern nachbearbeiten."),
     ]
 
     var body: some View {

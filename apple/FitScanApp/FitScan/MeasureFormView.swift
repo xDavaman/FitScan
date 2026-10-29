@@ -9,35 +9,9 @@ struct MeasureFormView: View {
     var showsCancel = true
     var onDone: @MainActor (ScanRecord) -> Void
 
-    private static let optional: [MeasureKey] = [.chest, .waist, .hips, .thigh, .upperarm, .calf, .neck, .inseam]
-
     var body: some View {
         Form {
-            Section("Person") {
-                TextField("Name", text: $app.person.name)
-                    .textContentType(.name)
-                Picker("Geschlecht", selection: $app.person.gender) {
-                    ForEach(Gender.allCases) { Text($0.label).tag($0) }
-                }
-                Stepper(value: $app.person.ageYears, in: 1...90, step: 1) {
-                    LabeledContent("Alter", value: "\(Int(app.person.ageYears)) Jahre")
-                }
-            }
-
-            Section {
-                measureField(.height)
-                measureField(.weight)
-            } header: {
-                Text("Pflicht")
-            }
-
-            Section {
-                ForEach(Self.optional) { measureField($0) }
-            } header: {
-                Text("Maßband (freiwillig)")
-            } footer: {
-                Text("Brust unter den Achseln, Taille an der schmalsten Stelle, Hüfte an der breitesten Stelle des Gesäßes. Oberschenkel, Oberarm und Wade links an der dicksten Stelle, entspannt.")
-            }
+            PersonSections()
 
             if !app.problems.isEmpty {
                 Section {
@@ -71,6 +45,41 @@ struct MeasureFormView: View {
         }
         .navigationBarBackButtonHidden(app.progress != nil)
         .interactiveDismissDisabled(app.progress != nil)
+    }
+}
+
+/// Person, Pflichtmaße und Maßband-Werte, gemeinsam für den Scan aus Maßen und aus Bildern.
+struct PersonSections: View {
+    @EnvironmentObject var app: AppModel
+
+    private static let optional: [MeasureKey] = [.chest, .waist, .hips, .thigh, .upperarm, .calf, .neck, .inseam]
+
+    var body: some View {
+        Section("Person") {
+            TextField("Name", text: $app.person.name)
+                .textContentType(.name)
+            Picker("Geschlecht", selection: $app.person.gender) {
+                ForEach(Gender.allCases) { Text($0.label).tag($0) }
+            }
+            Stepper(value: $app.person.ageYears, in: 1...90, step: 1) {
+                LabeledContent("Alter", value: "\(Int(app.person.ageYears)) Jahre")
+            }
+        }
+
+        Section {
+            measureField(.height)
+            measureField(.weight)
+        } header: {
+            Text("Pflicht")
+        }
+
+        Section {
+            ForEach(Self.optional) { measureField($0) }
+        } header: {
+            Text("Maßband (freiwillig)")
+        } footer: {
+            Text("Brust unter den Achseln, Taille an der schmalsten Stelle, Hüfte an der breitesten Stelle des Gesäßes. Oberschenkel, Oberarm und Wade links an der dicksten Stelle, entspannt.")
+        }
     }
 
     private func measureField(_ key: MeasureKey) -> some View {

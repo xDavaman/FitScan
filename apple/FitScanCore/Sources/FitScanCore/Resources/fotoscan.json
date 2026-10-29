@@ -1,0 +1,151 @@
+{
+ "format": "fitscan-fotoscan",
+ "version": 1,
+ "work_side": 640,
+ "contour_points": 400,
+ "pose_bones": [
+  "upperarm01.L",
+  "upperarm01.R",
+  "lowerarm01.L",
+  "lowerarm01.R",
+  "upperleg01.L",
+  "upperleg01.R",
+  "spine03",
+  "neck01"
+ ],
+ "video_locals": [
+  "torso-scale-depth-incr",
+  "torso-scale-horiz-incr",
+  "torso-vshape-incr",
+  "stomach-pregnant-incr",
+  "buttocks-volume-incr",
+  "hip-scale-depth-incr",
+  "hip-scale-horiz-incr",
+  "measure-shoulder-dist-incr",
+  "measure-upperarm-length-incr",
+  "measure-lowerarm-length-incr",
+  "measure-upperleg-height-incr",
+  "measure-lowerleg-height-incr",
+  "measure-napetowaist-dist-incr",
+  "measure-bust-circ-incr",
+  "measure-waist-circ-incr",
+  "measure-hips-circ-incr",
+  "measure-thigh-circ-incr",
+  "measure-calf-circ-incr",
+  "measure-upperarm-circ-incr",
+  "measure-neck-circ-incr"
+ ],
+ "keypoints": {
+  "11": {
+   "bone": "upperarm01.L",
+   "offset": [
+    -0.00323,
+    0.00104,
+    0.01731
+   ]
+  },
+  "12": {
+   "bone": "upperarm01.R",
+   "offset": [
+    0.00323,
+    0.00104,
+    0.01731
+   ]
+  },
+  "13": {
+   "bone": "lowerarm01.L",
+   "offset": [
+    -0.00295,
+    -0.00624,
+    0.0056
+   ]
+  },
+  "14": {
+   "bone": "lowerarm01.R",
+   "offset": [
+    0.00295,
+    -0.00624,
+    0.0056
+   ]
+  },
+  "15": {
+   "bone": "wrist.L",
+   "offset": [
+    0.00205,
+    -0.01169,
+    -0.00378
+   ]
+  },
+  "16": {
+   "bone": "wrist.R",
+   "offset": [
+    -0.00205,
+    -0.01169,
+    -0.00378
+   ]
+  },
+  "23": {
+   "bone": "upperleg01.L",
+   "offset": [
+    -0.00388,
+    -0.01458,
+    0.00636
+   ]
+  },
+  "24": {
+   "bone": "upperleg01.R",
+   "offset": [
+    0.00388,
+    -0.01458,
+    0.00636
+   ]
+  },
+  "25": {
+   "bone": "lowerleg01.L",
+   "offset": [
+    -1e-05,
+    -0.00178,
+    0.00751
+   ]
+  },
+  "26": {
+   "bone": "lowerleg01.R",
+   "offset": [
+    1e-05,
+    -0.00178,
+    0.00751
+   ]
+  },
+  "27": {
+   "bone": "foot.L",
+   "offset": [
+    0.00151,
+    -0.00045,
+    0.00868
+   ]
+  },
+  "28": {
+   "bone": "foot.R",
+   "offset": [
+    -0.00151,
+    -0.00045,
+    0.00868
+   ]
+  }
+ },
+ "silhouette_weight": 100.0,
+ "local_reg": 0.0005,
+ "pose_reg": 0.01,
+ "keypoint_weight_shape": 0.5,
+ "muscle_starts": [
+  0.25,
+  0.75
+ ],
+ "learning_rate": 0.02,
+ "probe_every": 50,
+ "steps": [
+  80,
+  160
+ ],
+ "fov_long_side_deg": 69.0
+}

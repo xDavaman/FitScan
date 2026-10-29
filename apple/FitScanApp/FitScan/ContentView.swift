@@ -158,8 +158,12 @@ struct NewScanView: View {
                     method("Mit deinen Maßen", "Größe und Gewicht, dazu nach Wunsch Maßband-Werte.",
                            "ruler", available: true)
                 }
-                method("Aus Fotos und Videos", "Kommt in einem der nächsten Builds.", "photo.on.rectangle",
-                       available: false)
+                NavigationLink {
+                    PhotoScanView(onDone: { app.finishedMeasureForm($0) })
+                } label: {
+                    method("Aus Fotos und Videos", "Ein Drehvideo oder einige Fotos aus deiner Mediathek.",
+                           "photo.on.rectangle", available: true)
+                }
                 method("Mit der Kamera", "Geführter Scan mit Ampel, kommt in einem der nächsten Builds.",
                        "camera.viewfinder", available: false)
             }

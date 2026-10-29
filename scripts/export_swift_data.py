@@ -18,6 +18,7 @@ from fitscan.body import BodyModel
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "apple/FitScanCore/Sources/FitScanCore/Resources/anny_v1.fsan"
 REFERENCE = ROOT / "apple/FitScanCore/Tests/FitScanCoreTests/Resources/referenz.json"
+SETTINGS = ROOT / "apple/FitScanCore/Sources/FitScanCore/Resources/fotoscan.json"
 
 
 def main() -> None:
@@ -27,13 +28,17 @@ def main() -> None:
     model = BodyModel.get("cpu")
     path = swiftdata.write_data(model, DATA)
     print(f"Anny-Daten: {path.relative_to(ROOT)} ({path.stat().st_size / 1e6:.1f} MB)")
+    SETTINGS.write_text(json.dumps(swiftdata.photo_settings(), ensure_ascii=False, indent=1) + "\n", "utf-8")
+    print(f"Fotoscan-Einstellungen: {SETTINGS.relative_to(ROOT)}")
     if not args.nur_daten:
         ref = swiftdata.reference(model)
+        ref["fotoscan"] = swiftdata.photo_reference(model, swiftdata.AnnyData(path))
         REFERENCE.parent.mkdir(parents=True, exist_ok=True)
         REFERENCE.write_text(json.dumps(ref, ensure_ascii=False, separators=(",", ":")), "utf-8")
         print(f"Prüfwerte: {REFERENCE.relative_to(ROOT)} ({REFERENCE.stat().st_size / 1e3:.0f} kB)")
         for name, fit in ref["fits"].items():
             print(f"  {name}: {fit['pc_measures']}")
+        print(f"  fotoscan: {ref['fotoscan']['fit']['measures']} (wahr {ref['fotoscan']['truth']})")
 
 
 if __name__ == "__main__":
