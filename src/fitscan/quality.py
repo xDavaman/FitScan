@@ -67,6 +67,38 @@ LIMITS = {
 SECTORS = 12  # Blickwinkel in 30°-Schritten
 
 
+# Hinweise je Code: Text und Ampelstufe. Die iPhone-App übernimmt sie aus `scanregeln.json`.
+HINTS = {
+    "keine_person": ("Keine Person erkannt. Ganz ins Bild stellen.", ROT),
+    "mehrere_personen": ("Mehrere Personen im Bild. Nur die gescannte Person darf zu sehen sein.", ROT),
+    "dunkel": ("Zu dunkel. Mehr weiches Licht von vorn.", ROT),
+    "hell": ("Überbelichtet. Licht etwas weicher machen oder Abstand zur Lampe vergrößern.", GELB),
+    "gegenlicht": (
+        "Gegenlicht: Hinter dir ist es heller als vorn. Fenster oder Lampe gehören hinter die Kamera, nicht hinter dich.",
+        GELB,
+    ),
+    "glanzlicht": (
+        "Licht zu hart, die Haut glänzt hell. Keine Lampe direkt über dir, lieber weiches Licht von vorn.",
+        GELB,
+    ),
+    "farbstich": ("Farbiges Licht. Weißes Licht oder Tageslicht nehmen, kein Nachtlicht und keine bunte Lampe.", GELB),
+    "socken": ("Bitte barfuß: Socken oder Schuhe verdecken die Zehen.", GELB),
+    "unscharf": ("Unscharf. Langsamer drehen und das Handy ruhig halten.", ROT),
+    "abgeschnitten": ("Kopf oder Füße sind abgeschnitten. Einen Schritt zurück.", ROT),
+    "zu_nah": ("Etwas zu nah. Einen kleinen Schritt zurück.", GELB),
+    "zu_weit": ("Zu weit weg. Etwas näher kommen, der ganze Körper soll das Bild gut füllen.", GELB),
+    "mitte": ("Bitte in die Bildmitte stellen.", GELB),
+    "kontrast": ("Person hebt sich schlecht vom Hintergrund ab. Ruhigere, andersfarbige Wand wählen.", GELB),
+    "hintergrund": ("Hintergrund ist sehr unruhig. Vor eine ruhige Wand stellen.", GELB),
+    "arme_anliegend": ("Arme etwas vom Körper abspreizen (A-Pose).", GELB),
+    "arme_hoch": ("Arme etwas tiefer halten (A-Pose, etwa 30° vom Körper).", GELB),
+    "arme_gebeugt": ("Arme gestreckt halten.", GELB),
+    "fuesse_eng": ("Füße etwas auseinander, etwa schulterbreit.", GELB),
+    "fuesse_weit": ("Füße nicht so weit auseinander.", GELB),
+    "stillhalten": ("Bitte stillhalten, Arme in der gleichen Position lassen.", GELB),
+}
+
+
 @dataclasses.dataclass
 class Hint:
     code: str
@@ -136,14 +168,15 @@ def check_frame(rgb: np.ndarray, obs: FrameObservation, prev: FrameObservation |
     hints: list[Hint] = []
     metrics: dict[str, float] = {}
 
-    def add(code: str, text: str, level: str) -> None:
+    def add(code: str) -> None:
+        text, level = HINTS[code]
         hints.append(Hint(code, text, level))
 
     if obs.keypoints is None:
-        add("keine_person", "Keine Person erkannt. Ganz ins Bild stellen.", ROT)
+        add("keine_person")
         return FrameQuality(obs.index, ROT, hints, metrics, None)
     if obs.persons > 1:
-        add("mehrere_personen", "Mehrere Personen im Bild. Nur die gescannte Person darf zu sehen sein.", ROT)
+        add("mehrere_personen")
 
     h, w = rgb.shape[:2]
     kp = obs.keypoints
@@ -158,11 +191,11 @@ def check_frame(rgb: np.ndarray, obs: FrameObservation, prev: FrameObservation |
         b_luma = float(gray[bg].mean()) if bg.any() else p_luma
         metrics.update(person_luma=p_luma, background_luma=b_luma)
         if p_luma < LIMITS["min_person_luma"]:
-            add("dunkel", "Zu dunkel. Mehr weiches Licht von vorn.", ROT)
+            add("dunkel")
         elif p_luma > LIMITS["max_person_luma"]:
-            add("hell", "Überbelichtet. Licht etwas weicher machen oder Abstand zur Lampe vergrößern.", GELB)
+            add("hell")
         if b_luma - p_luma > LIMITS["max_backlight"] and p_luma < LIMITS["backlight_person_luma"]:
-            add("gegenlicht", "Gegenlicht: Hinter dir ist es heller als vorn. Fenster oder Lampe gehören hinter die Kamera, nicht hinter dich.", GELB)
+            add("gegenlicht")
         upper = person.copy()
         if kp[[L_KNEE, R_KNEE], 2].min() > 0.5:
             upper[int(max(0.0, kp[L_KNEE, 1], kp[R_KNEE, 1])) :] = False  # weiße Socken zählen nicht
@@ -170,19 +203,19 @@ def check_frame(rgb: np.ndarray, obs: FrameObservation, prev: FrameObservation |
             shine = float((gray[upper] > LIMITS["highlight_luma"]).mean())
             metrics["highlight_share"] = shine
             if shine > LIMITS["max_highlight_share"]:
-                add("glanzlicht", "Licht zu hart, die Haut glänzt hell. Keine Lampe direkt über dir, lieber weiches Licht von vorn.", GELB)
+                add("glanzlicht")
         white = white_samples(rgb, person)
         if len(white):
             red, blue = float(np.median(white[:, 0])), float(np.median(white[:, 2]))
             metrics.update(white_red=red, white_blue=blue)
             if max(abs(math.log(red)), abs(math.log(blue))) > LIMITS["max_color_cast"]:
-                add("farbstich", "Farbiges Licht. Weißes Licht oder Tageslicht nehmen, kein Nachtlicht und keine bunte Lampe.", GELB)
+                add("farbstich")
         feet = _feet_vs_shins(rgb, person, kp)
         if feet:
             metrics["foot_chroma_ratio"] = min(f[0] for f in feet)
             metrics["foot_lightness"] = min(f[1] for f in feet)
             if all(c < LIMITS["max_foot_chroma"] or dl > LIMITS["max_foot_lightness"] for c, dl in feet):
-                add("socken", "Bitte barfuß: Socken oder Schuhe verdecken die Zehen.", GELB)
+                add("socken")
 
     # Schärfe im Personenbereich
     ys, xs = np.where(person)
@@ -194,7 +227,7 @@ def check_frame(rgb: np.ndarray, obs: FrameObservation, prev: FrameObservation |
         sharp = float(cv2.Laplacian(crop, cv2.CV_64F).var())
         metrics["sharpness"] = sharp
         if sharp < LIMITS["min_sharpness"]:
-            add("unscharf", "Unscharf. Langsamer drehen und das Handy ruhig halten.", ROT)
+            add("unscharf")
 
         # Position und Abstand
         frac = (y1 - y0) / h
@@ -202,15 +235,15 @@ def check_frame(rgb: np.ndarray, obs: FrameObservation, prev: FrameObservation |
         border = 2
         cut = person[:border].any() or person[-border:].any()
         if cut or kp[NOSE, 1] < 0 or max(kp[L_HEEL, 1], kp[R_HEEL, 1]) > h:
-            add("abgeschnitten", "Kopf oder Füße sind abgeschnitten. Einen Schritt zurück.", ROT)
+            add("abgeschnitten")
         elif frac > LIMITS["max_height_fraction"]:
-            add("zu_nah", "Etwas zu nah. Einen kleinen Schritt zurück.", GELB)
+            add("zu_nah")
         elif frac < LIMITS["min_height_fraction"]:
-            add("zu_weit", "Zu weit weg. Etwas näher kommen, der ganze Körper soll das Bild gut füllen.", GELB)
+            add("zu_weit")
         offset = abs((x0 + x1) / 2 - w / 2) / w
         metrics["center_offset"] = offset
         if offset > LIMITS["max_center_offset"]:
-            add("mitte", "Bitte in die Bildmitte stellen.", GELB)
+            add("mitte")
 
         # Hintergrund: weiche Maskenränder oder viele Kanten deuten auf Unruhe/wenig Kontrast
         soft = ((mask > 0.2) & (mask < 0.8)).sum() / max(person.sum(), 1)
@@ -223,9 +256,9 @@ def check_frame(rgb: np.ndarray, obs: FrameObservation, prev: FrameObservation |
         density = float(edges[outside].mean()) if outside.any() else 0.0
         metrics["background_edges"] = density
         if soft > LIMITS["max_soft_mask"]:
-            add("kontrast", "Person hebt sich schlecht vom Hintergrund ab. Ruhigere, andersfarbige Wand wählen.", GELB)
+            add("kontrast")
         elif density > LIMITS["max_background_edges"]:
-            add("hintergrund", "Hintergrund ist sehr unruhig. Vor eine ruhige Wand stellen.", GELB)
+            add("hintergrund")
 
     # Haltung (nur in Front- und Rückenansicht sinnvoll)
     yaw = obs.yaw_estimate
@@ -234,30 +267,30 @@ def check_frame(rgb: np.ndarray, obs: FrameObservation, prev: FrameObservation |
         la, ra = arm_angles(kp)
         metrics.update(arm_left_deg=la, arm_right_deg=ra)
         if min(la, ra) < LIMITS["arm_angle_min_deg"]:
-            add("arme_anliegend", "Arme etwas vom Körper abspreizen (A-Pose).", GELB)
+            add("arme_anliegend")
         elif max(la, ra) > LIMITS["arm_angle_max_deg"]:
-            add("arme_hoch", "Arme etwas tiefer halten (A-Pose, etwa 30° vom Körper).", GELB)
+            add("arme_hoch")
         if kp[[L_WRIST, R_WRIST], 2].min() > 0.5:
             le = _angle_deg(kp[L_SHOULDER, :2] - kp[L_ELBOW, :2], kp[L_WRIST, :2] - kp[L_ELBOW, :2])
             re = _angle_deg(kp[R_SHOULDER, :2] - kp[R_ELBOW, :2], kp[R_WRIST, :2] - kp[R_ELBOW, :2])
             metrics.update(elbow_left_deg=le, elbow_right_deg=re)
             if min(le, re) < LIMITS["min_elbow_deg"]:
-                add("arme_gebeugt", "Arme gestreckt halten.", GELB)
+                add("arme_gebeugt")
         if kp[[L_ANKLE, R_ANKLE, L_HIP, R_HIP], 2].min() > 0.5:
             hip = abs(kp[L_HIP, 0] - kp[R_HIP, 0])
             feet = abs(kp[L_ANKLE, 0] - kp[R_ANKLE, 0])
             ratio = feet / max(hip, 1.0)
             metrics["feet_ratio"] = ratio
             if ratio < LIMITS["feet_ratio_min"]:
-                add("fuesse_eng", "Füße etwas auseinander, etwa schulterbreit.", GELB)
+                add("fuesse_eng")
             elif ratio > LIMITS["feet_ratio_max"]:
-                add("fuesse_weit", "Füße nicht so weit auseinander.", GELB)
+                add("fuesse_weit")
         if prev is not None and prev.keypoints is not None:
             pla, pra = arm_angles(prev.keypoints)
             change = max(abs(la - pla), abs(ra - pra))
             metrics["arm_change_deg"] = change
             if change > LIMITS["max_arm_change_deg"]:
-                add("stillhalten", "Bitte stillhalten, Arme in der gleichen Position lassen.", GELB)
+                add("stillhalten")
 
     if np.mean(kp[FACE, 2]) < 0.3 and frontal and yaw is not None and abs(yaw) < 0.5:
         metrics["face_hidden"] = 1.0

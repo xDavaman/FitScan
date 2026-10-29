@@ -1,0 +1,130 @@
+{
+ "format": "fitscan-scanregeln",
+ "version": 1,
+ "limits": {
+  "min_person_luma": 70,
+  "max_person_luma": 225,
+  "max_backlight": 50,
+  "backlight_person_luma": 110,
+  "min_sharpness": 25.0,
+  "min_height_fraction": 0.45,
+  "max_height_fraction": 0.92,
+  "max_center_offset": 0.25,
+  "arm_angle_min_deg": 12.0,
+  "arm_angle_max_deg": 60.0,
+  "min_elbow_deg": 150.0,
+  "feet_ratio_min": 0.8,
+  "feet_ratio_max": 2.6,
+  "max_arm_change_deg": 12.0,
+  "max_soft_mask": 0.25,
+  "max_background_edges": 0.12,
+  "max_color_cast": 0.2,
+  "highlight_luma": 230,
+  "max_highlight_share": 0.01,
+  "min_shin_chroma": 10.0,
+  "max_foot_chroma": 0.6,
+  "max_foot_lightness": 30
+ },
+ "hints": {
+  "keine_person": {
+   "text": "Keine Person erkannt. Ganz ins Bild stellen.",
+   "level": "rot"
+  },
+  "mehrere_personen": {
+   "text": "Mehrere Personen im Bild. Nur die gescannte Person darf zu sehen sein.",
+   "level": "rot"
+  },
+  "dunkel": {
+   "text": "Zu dunkel. Mehr weiches Licht von vorn.",
+   "level": "rot"
+  },
+  "hell": {
+   "text": "Überbelichtet. Licht etwas weicher machen oder Abstand zur Lampe vergrößern.",
+   "level": "gelb"
+  },
+  "gegenlicht": {
+   "text": "Gegenlicht: Hinter dir ist es heller als vorn. Fenster oder Lampe gehören hinter die Kamera, nicht hinter dich.",
+   "level": "gelb"
+  },
+  "glanzlicht": {
+   "text": "Licht zu hart, die Haut glänzt hell. Keine Lampe direkt über dir, lieber weiches Licht von vorn.",
+   "level": "gelb"
+  },
+  "farbstich": {
+   "text": "Farbiges Licht. Weißes Licht oder Tageslicht nehmen, kein Nachtlicht und keine bunte Lampe.",
+   "level": "gelb"
+  },
+  "socken": {
+   "text": "Bitte barfuß: Socken oder Schuhe verdecken die Zehen.",
+   "level": "gelb"
+  },
+  "unscharf": {
+   "text": "Unscharf. Langsamer drehen und das Handy ruhig halten.",
+   "level": "rot"
+  },
+  "abgeschnitten": {
+   "text": "Kopf oder Füße sind abgeschnitten. Einen Schritt zurück.",
+   "level": "rot"
+  },
+  "zu_nah": {
+   "text": "Etwas zu nah. Einen kleinen Schritt zurück.",
+   "level": "gelb"
+  },
+  "zu_weit": {
+   "text": "Zu weit weg. Etwas näher kommen, der ganze Körper soll das Bild gut füllen.",
+   "level": "gelb"
+  },
+  "mitte": {
+   "text": "Bitte in die Bildmitte stellen.",
+   "level": "gelb"
+  },
+  "kontrast": {
+   "text": "Person hebt sich schlecht vom Hintergrund ab. Ruhigere, andersfarbige Wand wählen.",
+   "level": "gelb"
+  },
+  "hintergrund": {
+   "text": "Hintergrund ist sehr unruhig. Vor eine ruhige Wand stellen.",
+   "level": "gelb"
+  },
+  "arme_anliegend": {
+   "text": "Arme etwas vom Körper abspreizen (A-Pose).",
+   "level": "gelb"
+  },
+  "arme_hoch": {
+   "text": "Arme etwas tiefer halten (A-Pose, etwa 30° vom Körper).",
+   "level": "gelb"
+  },
+  "arme_gebeugt": {
+   "text": "Arme gestreckt halten.",
+   "level": "gelb"
+  },
+  "fuesse_eng": {
+   "text": "Füße etwas auseinander, etwa schulterbreit.",
+   "level": "gelb"
+  },
+  "fuesse_weit": {
+   "text": "Füße nicht so weit auseinander.",
+   "level": "gelb"
+  },
+  "stillhalten": {
+   "text": "Bitte stillhalten, Arme in der gleichen Position lassen.",
+   "level": "gelb"
+  }
+ },
+ "live": {
+  "side_shoulder_ratio": 0.35,
+  "confirm_checks": 2,
+  "check_interval_s": 0.2,
+  "capture_interval_s": 0.75,
+  "green_hold_s": 1.5,
+  "yellow_start_s": 8.0,
+  "max_turn_s": 45.0,
+  "max_frames": 24
+ },
+ "skipped": [
+  "farbstich",
+  "socken",
+  "kontrast",
+  "hintergrund"
+ ]
+}
