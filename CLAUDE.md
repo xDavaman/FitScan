@@ -24,6 +24,7 @@ Technischer Plan: https://claude.ai/code/artifact/e834733a-d72b-4a65-bdea-881002
 | `body.py` | Anny laden (`BodyModel.get`), `BodyParams` (Phänotyp, lokale Regler, Maßstab, Feinform-Offsets) |
 | `measure.py` | Maße wie mit dem Maßband (konvexe Hülle von Schnitten), differenzierbar über `MeasureProbe` |
 | `fit.py` | Anpassung an Maße (`fit_to_measurements`) und an Videobilder (`fit_to_frames`) |
+| `photofit.py` | Foto-/Videoscan der iPhone-App: eingeschränkte Videoanpassung ohne Autograd-Bedarf (Form, einfache Gelenkdrehung, Umriss- und Punktfehler), numpy-Rechenweg mit Hand-Gradienten als Vorlage für `PhotoFit.swift` |
 | `refine.py` | Feinform aus 48 Umrissen rundherum (Muskeln, Brust, Rücken als Form): Randlinie des Modells auf den Umriss, glatte Schritte („Large Steps“), Maßbandwerte bleiben |
 | `camera.py` | Lochkamera, Anny→Kamera, Silhouetten-Rendering |
 | `level.py` | gekipptes Handy ausgleichen: Neigung aus senkrechten Hintergrundkanten, Maske/Punkte auf waagerechte Kamera umrechnen |

@@ -1,17 +1,29 @@
 # FitScan für iPhone
 
-Erster TestFlight-Build: Das iPhone baut aus Größe, Gewicht und Maßband-Werten Annys Körpermodell,
-zeigt es in 3D und gibt es als GLB an Blender und Cascadeur weiter. Alles läuft offline auf dem Gerät.
-Der Video-Scan (Apple Vision, Anpassung an die Umrisse) kommt in einem der nächsten Builds.
+Das iPhone baut aus Größe, Gewicht, Maßband-Werten und nach Wunsch einem Drehvideo oder Fotos Annys
+Körpermodell, zeigt es in 3D und gibt es als GLB an Blender und Cascadeur weiter. Alles läuft offline
+auf dem Gerät.
+
+Ausbau in Etappen, je ein Pull Request, nach dem Merge per Kabel auf Sean-Johns iPhone:
+
+| Etappe | Inhalt | Stand |
+|---|---|---|
+| 0 | Modell aus Maßen, 3D-Vorschau, GLB teilen, Verlauf | auf main |
+| 1 | Startbildschirm mit Begrüßung und drehendem Modell, Maßbänder in der Vorschau, Scan-Anleitung, Willkommen beim ersten Start, Nachbearbeitung (Maße ändern, Form-Regler mit Live-Vorschau) | in Arbeit |
+| 2 | Animationen winken, rufen, sprechen, gehen (Clips aus der Bewegungsbibliothek) | geplant |
+| 3 | Scan aus Fotos und Videos der Mediathek: Apple Vision (Personenmaske, Körperpunkte), Form an die Umrisse angepasst, Kontrollbilder | in Arbeit |
+| 4 | Kamera-Scan mit Ampel (Regeln wie `quality.py`) | geplant |
+| 5 | Gesicht über Frontkamera und Face-ID-Sensor | geplant |
 
 | Ordner | Inhalt |
 |---|---|
 | `FitScanCore/` | Swift-Paket ohne Oberfläche: Anny-Körper, Maße wie mit dem Maßband, Anpassung an Maße, GLB-Export, Personen und Verlauf |
 | `FitScanCore/Sources/FitScanCore/Resources/anny_v1.fsan` | Annys Daten (CC0), geschrieben von `scripts/export_swift_data.py` |
+| `FitScanCore/Sources/FitScanCore/Resources/fotoscan.json` | Einstellungen des Fotoscans (Gelenke, Regler, Gewichte), ebenfalls vom PC |
 | `FitScanCore/Tests/` | Tests gegen die Prüfwerte vom PC (`referenz.json`) |
-| `FitScanApp/` | iPhone-App (SwiftUI, SceneKit), Xcode-Projekt `FitScan.xcodeproj`, Schema `FitScan` |
+| `FitScanApp/` | iPhone-App (SwiftUI, SceneKit), Xcode-Projekt `FitScan.xcodeproj`, Schema `FitScan`. Neue Dateien in `FitScanApp/FitScan/` nimmt Xcode von selbst auf. |
 
-Keine fremden Bibliotheken: nur Foundation, SwiftUI und SceneKit von Apple.
+Keine fremden Bibliotheken: nur Foundation, SwiftUI, SceneKit, Vision, AVFoundation und PhotosUI von Apple.
 
 ## Rechenweg wie am PC
 
@@ -20,6 +32,8 @@ Keine fremden Bibliotheken: nur Foundation, SwiftUI und SceneKit von Apple.
 | `body.BodyModel.rest` (PyTorch) | `BodyModel.rest`: Formen dünn besetzt, Knochenlagen per Procrustes |
 | `measure.MeasureProbe` | `MeasureProbe`: gleiche Schnitte, konvexe Hülle, gleiche Suchbänder |
 | `fit.fit_to_measurements` (Adam, Autograd) | `fitToMeasurements`: Adam mit von Hand abgeleitetem Gradienten |
+| `photofit.fit_photos` (eingeschränkte Fassung von `fit.fit_to_frames`) | `fitPhotos`: Abstandsbild der Maske, Randpunkte, Körperpunkte, eigene kleine Kinematik, Gradienten von Hand (am PC gegen PyTorch geprüft) |
+| `vision.py` (MediaPipe) | Apple Vision in der App: `VNGeneratePersonSegmentationRequest`, `VNDetectHumanBodyPoseRequest` |
 | `export.build_rig`, `write_glb` | `buildRig`, `writeGLB`: Bodengelenk, 4 Einflüsse je Punkt, 4 Formregler |
 | `store.Store` | `PersonStore`: Dokumente-Ordner der App, auch in der Dateien-App sichtbar |
 
@@ -45,6 +59,11 @@ Danach in Xcode ein beliebiges aktuelles iPhone als Simulator wählen (`xcrun si
 zeigt, welche installiert sind), Modell aus Maßen berechnen, 3D-Vorschau drehen, GLB teilen. Für das eigene iPhone
 in Xcode unter *Signing & Capabilities* das Team des Apple-Entwicklerkontos wählen. Die Bundle-ID ist
 `com.xdavaman.fitscan`.
+
+Fotoscan (Etappe 3) am besten auf dem iPhone prüfen, weil die Personenmaske von Vision nicht in jedem Simulator
+läuft: *Neuer Scan › Aus Fotos und Videos*, ein Drehvideo oder vier Fotos (vorn, beide Seiten, hinten) wählen,
+Größe und Gewicht eintragen, berechnen. Das Schema startet die App als Release-Build; im Debug-Build dauert die
+Anpassung ein Vielfaches.
 
 ## TestFlight
 

@@ -65,3 +65,29 @@ def test_reference_is_current(model):
         mine = measure_params(model, params)
         for key, value in body["measures"].items():
             assert abs(mine[key] - value) < 0.11, f"{name} {key}: {STALE}"
+
+
+def test_photo_settings_are_current():
+    """fotoscan.json (Einstellungen des Fotoscans in der App) passt zu `fitscan.photofit`."""
+    path = ROOT / "apple/FitScanCore/Sources/FitScanCore/Resources/fotoscan.json"
+    assert json.loads(path.read_text("utf-8")) == swiftdata.photo_settings(), STALE
+
+
+def test_photo_reference_is_current():
+    ref = json.loads(REFERENCE.read_text("utf-8"))["fotoscan"]
+    assert ref["body"] == swiftdata.PHOTO_BODY, STALE
+    assert len(ref["frames"]) == 4
+    f = ref["frames"][0]
+    mask = swiftdata.mask_from_runs(f["runs"], f["width"], f["height"])
+    assert mask.shape == (f["height"], f["width"])
+    assert mask.sum() >= ref["prepared"]["pixels"] > 0
+
+
+def test_mask_runs_round_trip():
+    rng = np.random.default_rng(4)
+    for first in (False, True):
+        mask = rng.random((7, 9)) < 0.4
+        mask[0, 0] = first
+        runs = swiftdata.mask_runs(mask)
+        assert sum(runs) == mask.size
+        assert np.array_equal(swiftdata.mask_from_runs(runs, 9, 7), mask)
