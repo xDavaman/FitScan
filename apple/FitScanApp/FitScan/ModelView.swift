@@ -11,6 +11,11 @@ struct ModelView: View {
     @State private var showTapes = true
     @State private var selected: MeasureKey?
     @State private var fitViews: [FitPicture] = []
+    /// Bewegung, deren Bilder gerade gerechnet werden
+    @State private var computingMotion: String?
+    @State private var motionFiles: [BoneNaming: URL] = [:]
+    @State private var writingFiles = false
+    @State private var fileError: String?
 
     var body: some View {
         List {
@@ -36,6 +41,18 @@ struct ModelView: View {
                     .onChange(of: showTapes) { _, on in scene.tapesVisible = on }
             } footer: {
                 Text("Mit einem Finger drehen, mit zwei Fingern zoomen. Tippe auf ein Maß, um sein Maßband hervorzuheben.")
+            }
+
+            if !app.motions.isEmpty {
+                Section {
+                    HStack(spacing: 8) {
+                        ForEach(app.motions) { clip in motionButton(clip) }
+                    }
+                } header: {
+                    Text("Bewegungen")
+                } footer: {
+                    Text("Ein zweiter Tipp hält die Bewegung an. Gehen läuft hier auf der Stelle, in Blender und Cascadeur geht die Figur vorwärts. Sprechen und Rufen bewegen Mund und Gesicht, Ton gibt es keinen.")
+                }
             }
 
             Section("Maße des Modells") {
@@ -102,15 +119,45 @@ struct ModelView: View {
                         Label("Für Cascadeur teilen (koerper_unreal.glb)", systemImage: "square.and.arrow.up")
                     }
                 }
+                if let url = motionFiles[.anny] {
+                    ShareLink(item: url) {
+                        Label("Mit Bewegungen für Blender teilen", systemImage: "square.and.arrow.up")
+                    }
+                }
+                if let url = motionFiles[.unreal] {
+                    ShareLink(item: url) {
+                        Label("Mit Bewegungen für Cascadeur teilen", systemImage: "square.and.arrow.up")
+                    }
+                }
+                if motionFiles.count < BoneNaming.allCases.count && !app.motions.isEmpty {
+                    Button {
+                        Task { await writeMotionFiles() }
+                    } label: {
+                        HStack {
+                            Label("Dateien mit Bewegungen erstellen", systemImage: "figure.walk.motion")
+                            if writingFiles {
+                                Spacer()
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(writingFiles)
+                }
+                if let fileError {
+                    Text(fileError)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
             } header: {
                 Text("Weitergeben")
             } footer: {
-                Text("Die Dateien liegen auch in der Dateien-App unter „Auf meinem iPhone › FitScan“. Am PC in Blender mit Datei › Importieren › glTF 2.0 öffnen.")
+                Text("Mit Bewegungen: Winken, Rufen, Sprechen und Gehen als Animationen, dazu 52 Gesichtsregler mit den Namen von Apple ARKit. Die Dateien liegen auch in der Dateien-App unter „Auf meinem iPhone › FitScan“. Am PC in Blender mit Datei › Importieren › glTF 2.0 öffnen.")
             }
         }
         .navigationTitle(record.person.name.isEmpty ? "Modell" : record.person.name)
         .navigationBarTitleDisplayMode(.inline)
         .task {
+            motionFiles = app.motionFiles(of: record)
             if fitViews.isEmpty {
                 let views = app.fitViews(of: record)
                 fitViews = await Task.detached(priority: .userInitiated) {
@@ -127,6 +174,68 @@ struct ModelView: View {
             scene.tapesVisible = showTapes
             loaded = true
         }
+    }
+
+    private func motionButton(_ clip: MotionClip) -> some View {
+        let active = scene.playing == clip.key
+        return Button {
+            Task { await toggleMotion(clip) }
+        } label: {
+            VStack(spacing: 4) {
+                if computingMotion == clip.key {
+                    ProgressView().frame(height: 24)
+                } else {
+                    Image(systemName: active ? "stop.fill" : Self.motionIcon(clip.key))
+                        .font(.title3)
+                        .frame(height: 24)
+                }
+                Text(clip.label).font(.caption)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
+        }
+        .buttonStyle(.bordered)
+        .tint(active ? Color.red : Color.accentColor)
+        .disabled(!loaded || (computingMotion != nil && computingMotion != clip.key))
+        .accessibilityLabel(active ? "\(clip.label) anhalten" : clip.label)
+    }
+
+    private static func motionIcon(_ key: String) -> String {
+        switch key {
+        case "winken": return "hand.wave"
+        case "rufen": return "megaphone"
+        case "sprechen": return "bubble.left"
+        case "gehen": return "figure.walk"
+        default: return "play"
+        }
+    }
+
+    /// Bewegung starten oder, wenn sie schon läuft, anhalten. Die Bilder werden beim ersten Mal gerechnet.
+    private func toggleMotion(_ clip: MotionClip) async {
+        guard computingMotion == nil else { return }
+        if scene.playing == clip.key {
+            scene.stopMotion()
+            return
+        }
+        if scene.replay(clip.key) { return }
+        guard let params = app.params(of: record) else { return }
+        computingMotion = clip.key
+        let frames = await app.motionFrames(clip, params: params)
+        computingMotion = nil
+        scene.play(clip.key, frames: frames, fps: clip.fps, loop: clip.loop)
+    }
+
+    private func writeMotionFiles() async {
+        writingFiles = true
+        fileError = nil
+        do {
+            for naming in BoneNaming.allCases {
+                motionFiles[naming] = try await app.motionGLB(record, naming: naming)
+            }
+        } catch {
+            fileError = "Datei ließ sich nicht schreiben: \(error.localizedDescription)"
+        }
+        writingFiles = false
     }
 
     private func measureRow(_ key: MeasureKey, _ value: Double) -> some View {

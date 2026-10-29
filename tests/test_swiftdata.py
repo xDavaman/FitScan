@@ -91,3 +91,76 @@ def test_mask_runs_round_trip():
         runs = swiftdata.mask_runs(mask)
         assert sum(runs) == mask.size
         assert np.array_equal(swiftdata.mask_from_runs(runs, 9, 7), mask)
+
+
+CLIPS = ROOT / "apple/FitScanCore/Sources/FitScanCore/Resources/bewegungen.json"
+FACE = ROOT / "apple/FitScanCore/Sources/FitScanCore/Resources/mimik.json"
+
+
+def _face_deltas(face: dict) -> dict[str, dict[int, np.ndarray]]:
+    return {a["name"]: dict(zip(a["index"], np.reshape(a["delta"], (-1, 3)), strict=True)) for a in face["actions"]}
+
+
+def test_clip_files_are_current(model):
+    """bewegungen.json und mimik.json passen zu den Clips und Annys Gesichtsreglern. Die Mimik rechnet
+    Anny in float32; auf anderen Rechnern rundet sie um 1 µm anders, das zählt nicht als veraltet."""
+    assert json.loads(CLIPS.read_text("utf-8")) == swiftdata.clip_library(), STALE
+    stored, fresh = json.loads(FACE.read_text("utf-8")), swiftdata.face_rig_data(model)
+    plain = ("format", "version", "unit", "landmarks")
+    assert {k: stored[k] for k in plain} == {k: fresh[k] for k in plain}, STALE
+    assert np.allclose(stored["base_face_size"], fresh["base_face_size"], rtol=0, atol=1e-7), STALE
+    old, new = _face_deltas(stored), _face_deltas(fresh)
+    assert old.keys() == new.keys(), STALE
+    zero = np.zeros(3, np.int64)
+    for name in new:
+        for i in old[name].keys() | new[name].keys():
+            assert np.abs(old[name].get(i, zero) - new[name].get(i, zero)).max() <= 1, STALE
+
+
+def test_motion_rig_rest_pose(data):
+    """Die Ruhepose als Haltung ergibt die unbewegte Haut (Übergang Ruhepose → Bewegung in der App)."""
+    rig = swiftdata.MotionRig(data, swiftdata.REFERENCE_BODIES["frau_60"])
+    rotations, offset = rig.rest_pose()
+    _, moves = rig.frame(rotations, offset)
+    assert np.abs(rig.skin(moves) - rig.vertices).max() < 1e-5
+
+
+def test_motion_rig_matches_play(model, data):
+    """Der Rechenweg der App für Bewegungen trifft `motion.play`, `gltf_channels` und `face_morphs`."""
+    from fitscan.clips import DATA as CLIP_DATA
+    from fitscan.face_rig import face_morphs
+    from fitscan.motion import Motion, gltf_channels, play
+
+    library = json.loads(CLIPS.read_text("utf-8"))
+    face = json.loads(FACE.read_text("utf-8"))
+    parents = [-1] + [p + 1 if p >= 0 else 0 for p in data.meta["bone_parents"]]
+    params = swiftdata.REFERENCE_BODIES["frau_60"]
+    rig = swiftdata.MotionRig(data, params)
+    for clip in library["clips"]:
+        pb = play(model, params, Motion.load(CLIP_DATA / f"{clip['key']}.npz"))
+        rotations, root = gltf_channels(pb, parents)
+        assert abs(rig.hip_height - pb.hip_height) < 1e-5
+        for f in (0, len(clip["root"]) // 2):
+            poses, moves = rig.clip_frame(clip, f)
+            assert np.abs(poses - pb.bones[f]).max() < 1e-4
+            assert np.abs(rig.skin(moves) - pb.vertices[f]).max() < 1e-4
+            q, r = swiftdata.gltf_channels_np(poses, data.meta["bone_parents"])
+            assert np.minimum(np.abs(q - rotations[f]).max(1), np.abs(q + rotations[f]).max(1)).max() < 1e-5
+            assert np.abs(r - root[f]).max() < 1e-5
+    mine = swiftdata.face_morphs_np(face, data.rest(params)["vertices"], np.asarray(model.faces))
+    theirs = face_morphs(model, model.rest_numpy(params)["vertices"])
+    assert sorted(mine) == sorted(theirs)
+    assert max(np.abs(mine[k] - theirs[k]).max() for k in theirs) < 1e-5
+
+
+def test_motion_reference_is_current(model):
+    from fitscan.clips import DATA as CLIP_DATA
+    from fitscan.motion import Motion, play
+
+    ref = json.loads(REFERENCE.read_text("utf-8"))["bewegungen"]
+    body = ref["bodies"]["standard"]
+    clip = body["clips"]["winken"]
+    pb = play(model, BodyParams(), Motion.load(CLIP_DATA / "winken.npz"))
+    assert abs(clip["hip_height"] - pb.hip_height) < 1e-6, STALE
+    f = clip["frames"][1]
+    assert np.abs(np.array(f["vertices"]) - pb.vertices[f["frame"]][ref["sample"]]).max() < 1e-5, STALE

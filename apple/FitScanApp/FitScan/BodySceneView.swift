@@ -22,6 +22,14 @@ struct BodyMesh {
     }
 }
 
+/// Bilder einer Bewegung für die Vorschau: weicher Übergang aus der Ruhepose, die Bewegung selbst
+/// und der Übergang zurück.
+struct MotionFrames {
+    var intro: [BodyMesh] = []
+    var main: [BodyMesh] = []
+    var outro: [BodyMesh] = []
+}
+
 /// Maßbänder als dünne Schläuche, je Umfang ein Netz.
 struct TapeMeshes {
     struct Tube {
@@ -64,6 +72,14 @@ final class BodyScene: ObservableObject {
     private let skin = SCNMaterial()
     private(set) var height: Float = 1.8
     private var framed = false
+    /// Bewegung, die gerade läuft (Schlüssel des Clips), sonst `nil`
+    @Published private(set) var playing: String?
+    private var restGeometry: SCNGeometry?
+    /// Zuletzt gerechnete Bewegung, damit ein zweiter Tipp nicht neu rechnet
+    private var lastMotion: Flipbook?
+    /// Zählt Start und Stopp, damit eine verspätete Fertig-Meldung keine neuere Bewegung beendet
+    private var motionToken = 0
+    private var tapesWanted = false
 
     static let tapeColor = UIColor(red: 1.0, green: 0.55, blue: 0.12, alpha: 1)
 
@@ -117,11 +133,10 @@ final class BodyScene: ObservableObject {
 
     /// Neues Körpernetz zeigen. Die Kamera bleibt, wo der Nutzer sie hingedreht hat.
     func show(_ mesh: BodyMesh) {
-        let geometry = SCNGeometry(
-            sources: [SCNGeometrySource(vertices: mesh.positions), SCNGeometrySource(normals: mesh.normals)],
-            elements: [SCNGeometryElement(indices: mesh.indices, primitiveType: .triangles)]
-        )
-        geometry.materials = [skin]
+        let geometry = makeGeometry(mesh, element: SCNGeometryElement(indices: mesh.indices, primitiveType: .triangles))
+        restGeometry = geometry
+        lastMotion = nil  // gerechnete Bewegungen gehören zur alten Form
+        if playing != nil { stopMotion() }
         body.geometry = geometry
         // Neu einrahmen beim ersten Netz oder wenn eine andere Person gezeigt wird; beim Bearbeiten
         // bleibt die Größe gleich und die Kamera da, wo der Nutzer sie hingedreht hat.
@@ -151,9 +166,97 @@ final class BodyScene: ObservableObject {
         }
     }
 
+    /// Maßbänder zeigen. Während einer Bewegung bleiben sie aus, sie passen nur zur Ruhepose.
     var tapesVisible: Bool {
-        get { !tapes.isHidden }
-        set { tapes.isHidden = !newValue }
+        get { tapesWanted }
+        set {
+            tapesWanted = newValue
+            tapes.isHidden = !newValue || playing != nil
+        }
+    }
+
+    private func makeGeometry(_ mesh: BodyMesh, element: SCNGeometryElement) -> SCNGeometry {
+        let geometry = SCNGeometry(
+            sources: [SCNGeometrySource(vertices: mesh.positions), SCNGeometrySource(normals: mesh.normals)],
+            elements: [element]
+        )
+        geometry.materials = [skin]
+        return geometry
+    }
+
+    private struct Flipbook {
+        let key: String
+        let intro: [SCNGeometry]
+        let main: [SCNGeometry]
+        let outro: [SCNGeometry]
+        let fps: Double
+        let loop: Bool
+    }
+
+    /// Bewegung abspielen: die fertig gerechneten Bilder nacheinander zeigen, mit weichem Übergang
+    /// aus der Ruhepose. Eine Schleife läuft, bis `stopMotion` kommt; sonst einmal, mit Übergang zurück
+    /// in die Ruhepose, danach läuft `then`.
+    func play(_ key: String, frames: MotionFrames, fps: Double, loop: Bool, then: (@MainActor () -> Void)? = nil) {
+        guard let first = frames.main.first, fps > 0 else { return }
+        // Alle Bilder teilen sich die Dreiecke, nur Punkte und Normalen ändern sich
+        let element = SCNGeometryElement(indices: first.indices, primitiveType: .triangles)
+        lastMotion = Flipbook(key: key,
+                              intro: frames.intro.map { makeGeometry($0, element: element) },
+                              main: frames.main.map { makeGeometry($0, element: element) },
+                              outro: frames.outro.map { makeGeometry($0, element: element) },
+                              fps: fps, loop: loop)
+        replay(key, then: then)
+    }
+
+    /// Die zuletzt gerechnete Bewegung noch einmal abspielen. `false`, wenn sie neu gerechnet werden muss.
+    @discardableResult
+    func replay(_ key: String, then: (@MainActor () -> Void)? = nil) -> Bool {
+        guard let motion = lastMotion, motion.key == key else { return false }
+        body.removeAction(forKey: "bewegung")
+        motionToken += 1
+        let token = motionToken
+        playing = key
+        tapes.isHidden = true
+        if motion.loop {
+            body.runAction(Self.flipbook(motion.intro + motion.main, fps: motion.fps, repeatFrom: motion.intro.count),
+                           forKey: "bewegung")
+        } else {
+            let done = Self.onMain { [weak self] in
+                guard let self, self.motionToken == token else { return }
+                self.stopMotion()
+                then?()
+            }
+            let all = motion.intro + motion.main + motion.outro
+            body.runAction(.sequence([Self.flipbook(all, fps: motion.fps, repeatFrom: nil), done]), forKey: "bewegung")
+        }
+        return true
+    }
+
+    /// Bewegung anhalten und die Ruhepose zeigen.
+    func stopMotion() {
+        motionToken += 1
+        body.removeAction(forKey: "bewegung")
+        if let restGeometry { body.geometry = restGeometry }
+        playing = nil
+        tapes.isHidden = !tapesWanted
+    }
+
+    /// Tauscht das Netz des Knotens Bild für Bild. Mit `repeatFrom` laufen die Bilder ab dort in
+    /// Schleife (bis `stopMotion`, längstens einen Tag), sonst einmal. Außerhalb des Main Actors gebaut,
+    /// weil SceneKit Aktionen auf seinem eigenen Render-Thread ausführt.
+    nonisolated private static func flipbook(_ geometries: [SCNGeometry], fps: Double, repeatFrom: Int?) -> SCNAction {
+        let count = geometries.count
+        let duration = repeatFrom == nil ? Double(count) / fps : 24 * 3600
+        return .customAction(duration: duration) { node, elapsed in
+            var i = max(Int(Double(elapsed) * fps), 0)
+            if let start = repeatFrom, i >= count, start < count { i = start + (i - start) % (count - start) }
+            let geometry = geometries[min(i, count - 1)]
+            if node.geometry !== geometry { node.geometry = geometry }
+        }
+    }
+
+    nonisolated private static func onMain(_ work: @escaping @MainActor () -> Void) -> SCNAction {
+        .run { _ in Task { @MainActor in work() } }
     }
 
     /// Ein Maßband hervorheben, die anderen blasser. `nil` zeigt alle gleich.
