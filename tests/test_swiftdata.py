@@ -91,3 +91,54 @@ def test_mask_runs_round_trip():
         runs = swiftdata.mask_runs(mask)
         assert sum(runs) == mask.size
         assert np.array_equal(swiftdata.mask_from_runs(runs, 9, 7), mask)
+
+
+CLIPS = ROOT / "apple/FitScanCore/Sources/FitScanCore/Resources/bewegungen.json"
+FACE = ROOT / "apple/FitScanCore/Sources/FitScanCore/Resources/mimik.json"
+
+
+def test_clip_files_are_current(model):
+    """bewegungen.json und mimik.json passen zu den Clips und Annys Gesichtsreglern."""
+    assert json.loads(CLIPS.read_text("utf-8")) == swiftdata.clip_library(), STALE
+    assert json.loads(FACE.read_text("utf-8")) == swiftdata.face_rig_data(model), STALE
+
+
+def test_motion_rig_matches_play(model, data):
+    """Der Rechenweg der App für Bewegungen trifft `motion.play`, `gltf_channels` und `face_morphs`."""
+    from fitscan.clips import DATA as CLIP_DATA
+    from fitscan.face_rig import face_morphs
+    from fitscan.motion import Motion, gltf_channels, play
+
+    library = json.loads(CLIPS.read_text("utf-8"))
+    face = json.loads(FACE.read_text("utf-8"))
+    parents = [-1] + [p + 1 if p >= 0 else 0 for p in data.meta["bone_parents"]]
+    params = swiftdata.REFERENCE_BODIES["frau_60"]
+    rig = swiftdata.MotionRig(data, params)
+    for clip in library["clips"]:
+        pb = play(model, params, Motion.load(CLIP_DATA / f"{clip['key']}.npz"))
+        rotations, root = gltf_channels(pb, parents)
+        assert abs(rig.hip_height - pb.hip_height) < 1e-5
+        for f in (0, len(clip["root"]) // 2):
+            poses, moves = rig.clip_frame(clip, f)
+            assert np.abs(poses - pb.bones[f]).max() < 1e-4
+            assert np.abs(rig.skin(moves) - pb.vertices[f]).max() < 1e-4
+            q, r = swiftdata.gltf_channels_np(poses, data.meta["bone_parents"])
+            assert np.minimum(np.abs(q - rotations[f]).max(1), np.abs(q + rotations[f]).max(1)).max() < 1e-5
+            assert np.abs(r - root[f]).max() < 1e-5
+    mine = swiftdata.face_morphs_np(face, data.rest(params)["vertices"], np.asarray(model.faces))
+    theirs = face_morphs(model, model.rest_numpy(params)["vertices"])
+    assert sorted(mine) == sorted(theirs)
+    assert max(np.abs(mine[k] - theirs[k]).max() for k in theirs) < 1e-5
+
+
+def test_motion_reference_is_current(model):
+    from fitscan.clips import DATA as CLIP_DATA
+    from fitscan.motion import Motion, play
+
+    ref = json.loads(REFERENCE.read_text("utf-8"))["bewegungen"]
+    body = ref["bodies"]["standard"]
+    clip = body["clips"]["winken"]
+    pb = play(model, BodyParams(), Motion.load(CLIP_DATA / "winken.npz"))
+    assert abs(clip["hip_height"] - pb.hip_height) < 1e-6, STALE
+    f = clip["frames"][1]
+    assert np.abs(np.array(f["vertices"]) - pb.vertices[f["frame"]][ref["sample"]]).max() < 1e-5, STALE

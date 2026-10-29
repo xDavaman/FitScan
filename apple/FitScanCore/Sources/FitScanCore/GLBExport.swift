@@ -174,7 +174,7 @@ struct GLBBuffer {
 }
 
 extension RiggedMesh {
-    func glb(name: String) throws -> Data {
+    func glb(name: String, animations: [GLBAnimation] = []) throws -> Data {
         var buf = GLBBuffer()
         let pos = buf.addVec3(vertices, minMax: true)
         let nor = buf.addVec3(normals)
@@ -218,7 +218,53 @@ extension RiggedMesh {
         }
         mesh["primitives"] = [primitive]
 
-        let gltf: [String: Any] = [
+        // Bewegungen wie `export._animation`: Drehspuren nur für Gelenke, die sich bewegen
+        var animationList: [[String: Any]] = []
+        for anim in animations {
+            let frames = anim.times.count
+            let times = buf.add(anim.times, component: GLBBuffer.float, type: "SCALAR", count: frames,
+                                minMax: (min: [Double(anim.times.first ?? 0)], max: [Double(anim.times.last ?? 0)]))
+            var samplers: [[String: Any]] = []
+            var channels: [[String: Any]] = []
+            func channel(_ node: Int, _ path: String, _ values: [Float], _ type: String, _ count: Int) {
+                let output = buf.add(values, component: GLBBuffer.float, type: type, count: count)
+                samplers.append(["input": times, "output": output, "interpolation": "LINEAR"])
+                channels.append(["sampler": samplers.count - 1, "target": ["node": node, "path": path]])
+            }
+            for j in 0..<jointNames.count {
+                let restQ = nodes[firstJoint + j]["rotation"] as? [Double] ?? [0, 0, 0, 1]
+                var moving = false
+                for q in anim.rotations where 4 * j + 3 < q.count {
+                    let d = (0..<4).reduce(0.0) { $0 + q[4 * j + $1] * restQ[$1] }
+                    if abs(abs(d) - 1) >= 1e-7 {
+                        moving = true
+                        break
+                    }
+                }
+                guard moving else { continue }
+                let values = anim.rotations.flatMap { q in (0..<4).map { Float(q[4 * j + $0]) } }
+                channel(firstJoint + j, "rotation", values, "VEC4", frames)
+            }
+            channel(firstJoint + 1, "translation", anim.rootTranslation.flatMap { [Float($0.x), Float($0.y), Float($0.z)] },
+                    "VEC3", frames)
+            if !anim.weights.isEmpty {
+                // glTF steuert immer alle Formregler des Netzes zusammen; nicht genannte bleiben bei 0
+                let names = morphs.map(\.name)
+                let unknown = anim.weights.keys.filter { !names.contains($0) }.sorted()
+                if !unknown.isEmpty {
+                    throw FitScanError.data("Formregler fehlen im Netz: \(unknown.joined(separator: ", "))")
+                }
+                var values = [Float](repeating: 0, count: frames * names.count)
+                for (k, target) in names.enumerated() {
+                    guard let curve = anim.weights[target] else { continue }
+                    for f in 0..<min(curve.count, frames) { values[f * names.count + k] = Float(curve[f]) }
+                }
+                channel(1, "weights", values, "SCALAR", values.count)
+            }
+            animationList.append(["name": anim.name, "samplers": samplers, "channels": channels])
+        }
+
+        var gltf: [String: Any] = [
             "asset": ["version": "2.0", "generator": "FitScan iOS"],
             "scene": 0,
             "scenes": [["name": name, "nodes": [0, 1]]],
@@ -232,6 +278,7 @@ extension RiggedMesh {
             "bufferViews": buf.views,
             "buffers": [["byteLength": buf.data.count]],
         ]
+        if !animationList.isEmpty { gltf["animations"] = animationList }
         var json = try JSONSerialization.data(withJSONObject: gltf, options: [.sortedKeys])
         while json.count % 4 != 0 { json.append(0x20) }
         buf.align()

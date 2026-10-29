@@ -147,6 +147,17 @@ public struct Rigid: Equatable {
     }
 }
 
+public extension Mat3 {
+    /// Quaternion (x, y, z, w) → Drehmatrix; normiert vorher, wie `swiftdata.quat_matrix`.
+    init(quaternion q: [Double]) {
+        let n = max((q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).squareRoot(), 1e-12)
+        let x = q[0] / n, y = q[1] / n, z = q[2] / n, w = q[3] / n
+        self.init([1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w),
+                   2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w),
+                   2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)])
+    }
+}
+
 /// Drehmatrix → Quaternion (x, y, z, w) mit w ≥ 0, wie `export._matrix_to_trs`.
 public func quaternion(_ r: Mat3) -> [Double] {
     let tr = r[0, 0] + r[1, 1] + r[2, 2]

@@ -394,3 +394,209 @@ def photo_reference(model: BodyModel, data: AnnyData) -> dict:
         "fit": {"measures": measures, "yaw_deg": [r.yaw_deg for r in results], "iou": [r.iou for r in results],
                 "params": fitted.to_json()},
     }
+
+
+# ---------------------------------------------------------------------------- Bewegungen
+
+CLIP_DIGITS = 6  # Nachkommastellen der Drehungen und Hüftpunkte in bewegungen.json
+FACE_LANDMARKS = (33, 263, 168, 152)  # äußere Augenwinkel, Nasenwurzel, Kinn (wie face_rig.face_size)
+CLIP_REFERENCE = {"winken": (0, 30, 60), "gehen": (0, 17)}  # Bilder für die Prüfwerte
+
+
+def clip_library() -> dict:
+    """Die App-Clips (winken, rufen, sprechen, gehen) für FitScanCore (`bewegungen.json`)."""
+    from .clips import DATA, NAMES
+    from .motion import Motion
+
+    clips = []
+    for key in NAMES:
+        m = Motion.load(DATA / f"{key}.npz")
+        clips.append({
+            "key": key, "label": m.name, "fps": m.fps, "loop": m.loop, "bones": list(m.bones),
+            "rotations": np.round(m.rotations.astype(np.float64), CLIP_DIGITS).reshape(m.frames, -1).tolist(),
+            "root": np.round(m.root.astype(np.float64), CLIP_DIGITS).tolist(),
+            "face": {k: np.round(v.astype(np.float64), 4).tolist() for k, v in sorted(m.face.items())},
+        })
+    return {"format": "fitscan-bewegungen", "version": 1, "clips": clips}
+
+
+def face_rig_data(model: BodyModel) -> dict:
+    """Annys 52 Gesichtsregler (ARKit-Namen) dünn besetzt in Mikrometern (`mimik.json`), dazu die
+    Gesichtspunkte, mit denen die App sie auf die Gesichtsgröße der Person skaliert."""
+    from .face_rig import anny_facial_actions, face_size
+    from .head import load_correspondence, surface_points
+
+    labels, deltas, base = anny_facial_actions()
+    tri, bary = load_correspondence()
+    actions = []
+    for label, d in zip(labels, deltas, strict=True):
+        micro = np.round(d.astype(np.float64) * 1e6).astype(np.int64)
+        idx = np.flatnonzero(np.abs(micro).max(1) > 0)
+        actions.append({"name": label, "index": idx.tolist(), "delta": micro[idx].reshape(-1).tolist()})
+    return {
+        "format": "fitscan-mimik", "version": 1, "unit": "mikrometer",
+        "base_face_size": face_size(surface_points(base, model.faces, tri, bary)).round(9).tolist(),
+        "landmarks": [[int(tri[i]), *np.round(bary[i], 9).tolist()] for i in FACE_LANDMARKS],
+        "actions": actions,
+    }
+
+
+def quat_matrix(q: np.ndarray) -> np.ndarray:
+    """Quaternion (x, y, z, w), auch nicht ganz normiert, → Drehmatrix, wie `Mat3(quaternion:)`."""
+    x, y, z, w = np.asarray(q, np.float64) / np.linalg.norm(q)
+    return np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                     [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                     [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
+
+
+def _rigid(r: np.ndarray, t: np.ndarray) -> np.ndarray:
+    m = np.eye(4)
+    m[:3, :3] = r
+    m[:3, 3] = t
+    return m
+
+
+def _inverse(m: np.ndarray) -> np.ndarray:
+    return _rigid(m[:3, :3].T, -m[:3, :3].T @ m[:3, 3])
+
+
+class MotionRig:
+    """Bewegungen auf einem Körper abspielen, wie FitScanCore (`MotionRig`) es rechnet.
+
+    Annys Haltung „local-ref“: Jede Drehung wirkt in Weltachsen um den Gelenkkopf der Bezugshaltung
+    (alle Knochen in `reference_bone_orientations`) und nimmt die Kinder mit. Gegenüber der
+    Ruhepose ist die Hautbewegung eines Knochens daher erst „Ruhepose → Bezugshaltung“ (`ref`), dann
+    die Drehungen der Bewegung. Die Hüfte steht im Ursprung und wird mit dem Hüftpunkt der Bewegung
+    (in Hüfthöhen) verschoben."""
+
+    def __init__(self, data: AnnyData, params: BodyParams):
+        self.data = data
+        rest = data.rest(params)
+        self.vertices = rest["vertices"]
+        poses = rest["bone_poses"]
+        orient = data.arrays["reference_bone_orientations"].astype(np.float64).reshape(-1, 3, 3)
+        self.parents = list(data.meta["bone_parents"])
+        n = len(poses)
+        self.ref = np.zeros((n, 4, 4))  # Ruhepose → Bezugshaltung
+        self.heads = np.zeros((n, 3))  # Gelenkköpfe in der Bezugshaltung
+        self.ref_poses = np.zeros((n, 4, 4))
+        for j, p in enumerate(self.parents):
+            head = poses[j][:3, 3] if p < 0 else self.ref[p][:3, :3] @ poses[j][:3, 3] + self.ref[p][:3, 3]
+            self.heads[j] = head
+            self.ref_poses[j] = _rigid(orient[j], head)
+            self.ref[j] = np.eye(4) if p < 0 else self.ref_poses[j] @ _inverse(poses[j])
+        self.rest_poses = poses
+        k = data.arrays["vertex_bone_indices"].shape[1]
+        self.indices = data.arrays["vertex_bone_indices"].astype(np.int64).reshape(-1, k)
+        self.weights = data.arrays["vertex_bone_weights"].astype(np.float64).reshape(-1, k)
+        identity = self.frame(np.repeat(np.eye(3)[None], n, 0), np.zeros(3))
+        self.hip_height = float(-self.skin(identity[1])[:, 2].min())
+
+    def frame(self, rotations: np.ndarray, offset: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """rotations: (J, 3, 3) je Knochen (Einheitsmatrix = Bezugshaltung). → Knochen in der Welt
+        (J, 4, 4) und Hautbewegung gegenüber der Ruhepose (J, 4, 4), beide um `offset` verschoben."""
+        n = len(self.parents)
+        inner = np.zeros((n, 4, 4))
+        for j, p in enumerate(self.parents):
+            r, h = rotations[j], self.heads[j]
+            inner[j] = _rigid(r, -r @ h) if p < 0 else inner[p] @ _rigid(r, h - r @ h)
+        shift = _rigid(np.eye(3), offset)
+        moves = np.einsum("ij,njk,nkl->nil", shift, inner, self.ref)
+        return np.einsum("nij,njk->nik", moves, self.rest_poses), moves
+
+    def skin(self, moves: np.ndarray, vertices: np.ndarray | None = None) -> np.ndarray:
+        v = self.vertices if vertices is None else vertices
+        blend = np.einsum("vk,vkij->vij", self.weights, moves[self.indices])
+        return np.einsum("vij,vj->vi", blend[:, :3, :3], v) + blend[:, :3, 3]
+
+    def clip_frame(self, clip: dict, f: int, in_place: bool = False) -> tuple[np.ndarray, np.ndarray]:
+        rot = np.repeat(np.eye(3)[None], len(self.parents), 0)
+        flat = np.asarray(clip["rotations"][f], np.float64).reshape(-1, 4)
+        for name, q in zip(clip["bones"], flat, strict=True):
+            rot[self.data.bone_labels.index(name)] = quat_matrix(q)
+        root = np.array(clip["root"][f], np.float64)
+        if in_place:
+            first, last = np.array(clip["root"][0]), np.array(clip["root"][-1])
+            root[:2] -= (last - first)[:2] * f / max(len(clip["root"]) - 1, 1)
+        return self.frame(rot, root * self.hip_height)
+
+
+def face_morphs_np(face: dict, vertices: np.ndarray, faces: np.ndarray) -> dict[str, np.ndarray]:
+    """Gesichtsregler für eine Person wie `face_rig.face_morphs`, aus `mimik.json` (dicht, Meter)."""
+    pts = []
+    for tri, *bary in face["landmarks"]:
+        corners = vertices[faces[tri]]
+        pts.append((corners * np.asarray(bary)[:, None]).sum(0))
+    mine = np.array([np.linalg.norm(pts[1] - pts[0]), np.linalg.norm(pts[2] - pts[3])])
+    scale = float(np.sqrt(np.prod(mine / np.asarray(face["base_face_size"]))))
+    out = {}
+    for a in face["actions"]:
+        d = np.zeros((len(vertices), 3))
+        d[a["index"]] = np.asarray(a["delta"], np.float64).reshape(-1, 3) * 1e-6 * scale
+        out[a["name"]] = d
+    return out
+
+
+def gltf_channels_np(poses: np.ndarray, parents: list[int]) -> tuple[np.ndarray, np.ndarray]:
+    """Drehungen aller glTF-Gelenke (Bodengelenk zuerst) und Lage des Hüftgelenks für ein Bild, wie
+    `motion.gltf_channels` (Y oben)."""
+    to_y = np.array([[1.0, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1]])
+    world = np.concatenate([np.eye(4)[None], np.einsum("ij,njk->nik", to_y, poses)])
+    gparents = [-1] + [p + 1 if p >= 0 else 0 for p in parents]
+    quats = []
+    for k, p in enumerate(gparents):
+        local = world[k] if p < 0 else _inverse(world[p]) @ world[k]
+        quats.append(_matrix_quat(local[:3, :3]))
+        if k == 1:
+            root = local[:3, 3]
+    return np.array(quats), root
+
+
+def _matrix_quat(r: np.ndarray) -> np.ndarray:
+    """Wie `quaternion()` in Linear3.swift: x, y, z, w mit w ≥ 0."""
+    tr = np.trace(r)
+    if tr > 0:
+        s = np.sqrt(tr + 1) * 2
+        q = [(r[2, 1] - r[1, 2]) / s, (r[0, 2] - r[2, 0]) / s, (r[1, 0] - r[0, 1]) / s, 0.25 * s]
+    elif r[0, 0] > r[1, 1] and r[0, 0] > r[2, 2]:
+        s = np.sqrt(1 + r[0, 0] - r[1, 1] - r[2, 2]) * 2
+        q = [0.25 * s, (r[0, 1] + r[1, 0]) / s, (r[0, 2] + r[2, 0]) / s, (r[2, 1] - r[1, 2]) / s]
+    elif r[1, 1] > r[2, 2]:
+        s = np.sqrt(1 + r[1, 1] - r[0, 0] - r[2, 2]) * 2
+        q = [(r[0, 1] + r[1, 0]) / s, 0.25 * s, (r[1, 2] + r[2, 1]) / s, (r[0, 2] - r[2, 0]) / s]
+    else:
+        s = np.sqrt(1 + r[2, 2] - r[0, 0] - r[1, 1]) * 2
+        q = [(r[0, 2] + r[2, 0]) / s, (r[1, 2] + r[2, 1]) / s, 0.25 * s, (r[1, 0] - r[0, 1]) / s]
+    q = np.array(q) / np.linalg.norm(q)
+    return -q if q[3] < 0 else q
+
+
+def motion_reference(model: BodyModel, data: AnnyData, library: dict, face: dict) -> dict:
+    """Prüfwerte der Bewegungen vom PC (`motion.play`, `motion.gltf_channels`, `face_rig.face_morphs`)
+    für den Standard- und den kräftigen Testkörper."""
+    from .clips import DATA
+    from .face_rig import face_morphs
+    from .motion import Motion, gltf_channels, play
+
+    sample = list(range(0, model.num_vertices, SAMPLE_STEP))
+    parents = [-1] + [p + 1 if p >= 0 else 0 for p in data.meta["bone_parents"]]
+    bodies = {}
+    for body in ("standard", "kraeftig"):
+        params = REFERENCE_BODIES[body]
+        clips = {}
+        for key, frames in CLIP_REFERENCE.items():
+            pb = play(model, params, Motion.load(DATA / f"{key}.npz"))
+            rotations, root = gltf_channels(pb, parents)
+            clips[key] = {"hip_height": pb.hip_height, "frames": [{
+                "frame": f,
+                "bones": np.round(pb.bones[f][:, :3, :].astype(np.float64), 7).tolist(),
+                "vertices": np.round(pb.vertices[f][sample].astype(np.float64), 7).tolist(),
+                "gltf_rotations": np.round(rotations[f].astype(np.float64), 6).tolist(),
+                "gltf_root": np.round(root[f].astype(np.float64), 7).tolist(),
+            } for f in frames]}
+        morphs = face_morphs(model, model.rest_numpy(params)["vertices"])
+        face_sample = {name: np.round(morphs[name][sample].astype(np.float64), 8).tolist()
+                       for name in ("jawOpen", "mouthSmileLeft", "eyeBlinkRight")}
+        bodies[body] = {"params": params.to_json(), "clips": clips, "face": face_sample}
+    return {"sample": sample, "bodies": bodies, "clips": [c["key"] for c in library["clips"]],
+            "face_actions": len(face["actions"])}
