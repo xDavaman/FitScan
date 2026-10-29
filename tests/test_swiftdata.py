@@ -97,10 +97,24 @@ CLIPS = ROOT / "apple/FitScanCore/Sources/FitScanCore/Resources/bewegungen.json"
 FACE = ROOT / "apple/FitScanCore/Sources/FitScanCore/Resources/mimik.json"
 
 
+def _face_deltas(face: dict) -> dict[str, dict[int, np.ndarray]]:
+    return {a["name"]: dict(zip(a["index"], np.reshape(a["delta"], (-1, 3)), strict=True)) for a in face["actions"]}
+
+
 def test_clip_files_are_current(model):
-    """bewegungen.json und mimik.json passen zu den Clips und Annys Gesichtsreglern."""
+    """bewegungen.json und mimik.json passen zu den Clips und Annys Gesichtsreglern. Die Mimik rechnet
+    Anny in float32; auf anderen Rechnern rundet sie um 1 µm anders, das zählt nicht als veraltet."""
     assert json.loads(CLIPS.read_text("utf-8")) == swiftdata.clip_library(), STALE
-    assert json.loads(FACE.read_text("utf-8")) == swiftdata.face_rig_data(model), STALE
+    stored, fresh = json.loads(FACE.read_text("utf-8")), swiftdata.face_rig_data(model)
+    plain = ("format", "version", "unit", "landmarks")
+    assert {k: stored[k] for k in plain} == {k: fresh[k] for k in plain}, STALE
+    assert np.allclose(stored["base_face_size"], fresh["base_face_size"], rtol=0, atol=1e-7), STALE
+    old, new = _face_deltas(stored), _face_deltas(fresh)
+    assert old.keys() == new.keys(), STALE
+    zero = np.zeros(3, np.int64)
+    for name in new:
+        for i in old[name].keys() | new[name].keys():
+            assert np.abs(old[name].get(i, zero) - new[name].get(i, zero)).max() <= 1, STALE
 
 
 def test_motion_rig_rest_pose(data):
