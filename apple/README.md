@@ -68,7 +68,8 @@ läuft: *Neuer Scan › Aus Fotos und Videos*, ein Drehvideo oder vier Fotos (vo
 Größe und Gewicht eintragen, berechnen. Das Schema startet die App als Release-Build; im Debug-Build dauert die
 Anpassung ein Vielfaches.
 
-Bewegungen (Etappe 2): Beim Start winkt das Modell einmal von vorn und dreht sich danach. Im Modell unter
+Bewegungen (Etappe 2): Beim Start winkt das Modell einmal von vorn (mit weichem Übergang aus der Ruhepose und
+zurück) und dreht sich danach. Im Modell unter
 *Bewegungen* Winken, Rufen, Sprechen oder Gehen tippen (beim ersten Mal wird kurz gerechnet), nochmal tippen hält an.
 Unter *Weitergeben › Dateien mit Bewegungen erstellen* entstehen `koerper_bewegungen.glb` und
 `koerper_bewegungen_unreal.glb`; in Blender liegen die vier Bewegungen als Aktionen im Action Editor.

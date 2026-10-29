@@ -195,7 +195,7 @@ struct ModelView: View {
             .padding(.vertical, 4)
         }
         .buttonStyle(.bordered)
-        .tint(active ? Color.accentColor : nil)
+        .tint(active ? Color.red : Color.accentColor)
         .disabled(!loaded || (computingMotion != nil && computingMotion != clip.key))
         .accessibilityLabel(active ? "\(clip.label) anhalten" : clip.label)
     }
